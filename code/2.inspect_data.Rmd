@@ -1,0 +1,269 @@
+---
+title: "2.inspect_data"
+author: "Dennis Kim"
+date: "2022-10-03"
+output: html_document
+---
+
+# Objective 
+
+To manipulate the merged tracking data with the other addtional columns for SSFs. To do this, I will: 
+
+1. Determine infected individuals and healthy individuals    
+2. Inspect movement characteristics of individuals 
+3. Compare 
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(dplyr)
+library(readr)
+library(data.table)
+library(DT)
+library(here)
+library(stringr)
+library(tidyr)
+library(purrr)
+library(lubridate)
+library(amt)
+library(ggplot2)
+options(width = 150)
+
+# set knitr options 
+opts_chunk$set(fig.width = 6, fig.height = 5, comment = NA)
+```
+
+# Data download and initial preparation
+
+Read in the gps data and 
+```{r read in data}
+# Location data of the oryx with additional disease columns 
+oryx <- read.csv(here::here("data", "oryx_gps_id.csv"))
+
+# summary of the location data 
+summary(oryx)
+```
+
+## Healthy individuals
+
+Identify healthy individuals   
+```{r healthy data}
+# NAs in fate column convert to unkown
+oryx$fate[is.na(oryx$fate)] <- "unknown"
+
+# filter out the alive individuals = 153 individuals
+alive.oryx <- oryx %>% filter(fate == "alive")
+alive.oryx %>% summary()
+
+# time range dataframe
+t.alive.oryx <- alive.oryx %>% dplyr::select(collar_ID, date) %>% nest_by(collar_ID) %>% mutate(min_date = map(data, min),
+                                                                                max_date = map(data, max)) %>% unnest(min_date, max_date) %>% 
+                                                                        mutate(range_time = difftime(max_date, min_date)) %>% dplyr::select(collar_ID, min_date, max_date, range_time)
+
+# Filter the data by only selecting individuals that have more than 2000 days of worth locations
+t.alive.oryx %>% filter(range_time > 2000)
+
+# 5 individuals total
+long.alive.oryx <- alive.oryx %>% filter(., collar_ID %in% c("21808.2", "21819.2", "21826.2", "32138.2", "38241.1"))
+long.alive.oryx <- long.alive.oryx[,1:13]
+
+# change the time format of the data 
+long.alive.oryx$date <- as.POSIXct(long.alive.oryx$date, format = "%Y-%m-%d %H:%M:%S")
+long.alive.oryx <- long.alive.oryx %>% drop_na() # drop the nas
+
+long.alive.oryx %>% summary()
+```
+
+Plot the data 
+```{r alive plots}
+# facet id plots
+ggplot(long.alive.oryx, aes(x = long,
+                         y = lat))+ geom_point()+
+  facet_wrap(~collar_ID, scales = "free")+
+  ggtitle("Locations of alive individuals")
+```
+
+## Disease-induced individuals
+
+Filter data that has disease info 
+```{r disease data}
+# inspect the IDs that are dead due to the disease (4 ids)
+oryx %>% dplyr::select(collar_ID, cause_of_death) %>% distinct() %>% dplyr::filter(!is.na(cause_of_death)) %>% dplyr::filter(cause_of_death == "disease")
+
+# select individuals with disease 
+oryx.disease <- oryx %>% dplyr::filter(cause_of_death == "disease")
+
+# check the time range of each individuals died by disease
+oryx.disease %>% group_by(collar_ID, date_released, est_DOD) %>% nest(.)
+
+# change the time format of the data 
+oryx.disease$date <- as.POSIXct(oryx.disease$date, format = "%Y-%m-%d %H:%M:%S")
+oryx.disease <- oryx.disease %>% drop_na() # drop the nas
+```
+There are total 4 individuals that are confirmed to be dead by disease: 21819.1, 21839.1, 22112.1,and 29927.0
+
+Plot the data 
+```{r disease plots}
+# facet id plots
+ggplot(oryx.disease, aes(x = long,
+                         y = lat))+ geom_point()+
+  facet_wrap(~collar_ID, scales = "free")+
+  ggtitle("Locations of disease individuals")
+```
+
+# Amt conversion 
+
+Add a track class to the data and summarize the data 
+```{r amt conversion}
+# make tracks 
+trk.disease <- amt::make_track(oryx.disease, .x=long, .y=lat, .t=date, id = collar_ID, sex = sex, fate = fate, est_DOD = est_DOD) # disease
+trk.alive <- amt::make_track(long.alive.oryx, .x=long, .y=lat, .t=date, id= collar_ID, sex= sex, fate = fate) # healthy 
+
+# calculate day/night from the movement track 
+trk.alive$hour <- hour(trk.alive$t_) # calculate the hour
+trk.alive$tod <- ifelse(trk.alive$hour < 7 | 19 < trk.alive$hour, "night", "day") # day/night
+trk.alive %>% summary()
+
+
+trk.disease$hour <- hour(trk.disease$t_) # calculate the hour
+trk.disease$tod <- ifelse(trk.disease$hour < 7 | 19 < trk.disease$hour, "night", "day") # day/night
+trk.disease %>% summary()
+```
+
+# Movement characteristics 
+
+Calculate step lengths and net squared displacements for each individual, then rbind the data back together. 
+```{r movement characteristics}
+# healthy
+
+# nest data by id and add columns to each nested column of data (sl and nsd)
+trk1.alive <- trk.alive %>% nest_by(id) %>% 
+  mutate(sl_ = list(step_lengths(data)),
+         nsd_ = list(nsd(data))) %>% unnest() %>% ungroup()
+
+# calculate year, month, week of each observation and append these to the dataset 
+trk1.alive <- trk1.alive %>% mutate(
+  year = year(t_),
+  month = month(t_, label = TRUE),
+  week = week(t_)
+)
+
+trk1.alive <- trk1.alive %>% ungroup()
+
+# disease
+
+# nest data by id and add columns to each nested column of data (sl and nsd)
+trk1.disease <- trk.disease %>% nest_by(id) %>% 
+  mutate(sl_ = list(step_lengths(data)),
+         nsd_ = list(nsd(data))) %>% unnest()
+
+# calculate year, month, week of each observation and append these to the dataset 
+trk1.disease <- trk1.disease %>% mutate(
+  year = year(t_),
+  month = month(t_, label = TRUE),
+  week = week(t_)
+)
+
+trk1.disease <- trk1.disease %>% ungroup()
+```
+
+## Net-squared displacement over time for each individual 
+```{r nsd visualization}
+## alive
+alive.nsd.vis <- ggplot(trk1.alive, aes(x = t_, y = nsd_))+ geom_path()+
+  facet_wrap(~id, scales = "free")+
+  ylab("NSD")+
+  xlab("Time")+
+  ggtitle("Healthy: NSD over time")
+
+alive.nsd.vis
+
+## disease 
+disease.nsd.vis <- ggplot(trk1.disease, aes(x = t_, y = nsd_))+ geom_path()+
+  facet_wrap(~id, scales = "free")+
+  ylab("NSD")+
+  xlab("Time")+
+  ggtitle("Disease: NSD over time")
+
+disease.nsd.vis
+
+# save the plot 
+#ggsave("alive_nsd.png", alive.nsd.vis, width = 14, height = 11)
+#ggsave("disease_nsd.png", disease.nsd.vis, width = 14, height = 11)
+```
+
+## Step length distribution by day/night 
+```{r sl visualization, message=FALSE, warning=FALSE}
+# alive
+alive.sl.dnight <- ggplot(trk1.alive, aes(x= tod, y= log(sl_)))+
+  geom_boxplot()+ geom_smooth()+
+  facet_wrap(~id)+
+  ylab("Log(SL)")+
+  xlab("Time of day")+
+  ggtitle("Healthy: Step Legnths over time of the day")
+
+alive.sl.dnight
+
+# disease 
+disease.sl.dnight <- ggplot(trk1.disease, aes(x= tod, y= log(sl_)))+
+  geom_boxplot()+ geom_smooth()+
+  facet_wrap(~id)+
+  ylab("Log(SL)")+
+  xlab("Time of day")+
+  ggtitle("Disease: Step Legnths over time of the day")
+
+disease.sl.dnight
+
+# save the plot 
+#ggsave("alive_sl_dnight.png", alive.sl.dnight, width = 14, height = 11)
+#ggsave("disease_sl_dnight.png", disease.sl.dnight, width = 14, height = 11)
+```
+
+## Space us (KDE) by week 
+
+calculate KDE 
+```{r KDE calculation, message=FALSE, warning=FALSE}
+# calculate the kde areas per week
+disease.kde.week <- trk.disease %>% mutate(week = week(t_)) %>% nest_by(id, week) %>% 
+  transmute(kdearea = list(hr_kde(data, levels = 0.95) %>% hr_area)) %>% 
+  unnest()
+
+alive.kde.week <- trk.alive %>% mutate(week = week(t_)) %>% nest_by(id, week) %>% 
+  transmute(kdearea = list(hr_kde(data, levels = 0.95) %>% hr_area)) %>% 
+  unnest()
+
+# kde overweek visualization 
+alive.kde.vis <- ggplot(alive.kde.week, aes(x = week, y = area))+
+  geom_point()+
+  geom_smooth()+
+  facet_wrap(~id, scales = "free")+
+  xlab("Week")+
+  ylab("KDE area")+
+  ggtitle("Healthy: Kernel Density Estimation (KDE) over time (weeks)")
+
+alive.kde.vis
+
+disease.kde.vis <- ggplot(disease.kde.week, aes(x = week, y = area))+
+  geom_point()+
+  geom_smooth()+
+  facet_wrap(~id, scales = "free")+
+  xlab("Week")+
+  ylab("KDE area")+
+  ggtitle("Disease: Kernel Density Estimation (KDE) over time (weeks)")
+
+disease.kde.vis
+
+# save the plots 
+#ggsave("alive_kde.png", alive.kde.vis, width = 14, height = 11)
+#ggsave("disease_kde.png", disease.kde.vis, width = 14, height = 11)
+```
+
+# Individual selection for further analysis
+
+We will select one healthy individual: 21826.2 which shows a less pattern of movement than the other individuals. For the disease-induced individuals, individual 21819.1 can be reasonable to use for comparison analysis. 
+
+## Footer
+```{r footer}
+sessionInfo()
+```
