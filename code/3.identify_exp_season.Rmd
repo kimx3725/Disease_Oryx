@@ -1,0 +1,118 @@
+---
+title: "3.identify_exp_season"
+author: "Dennis Kim"
+date: "2022-10-03"
+output: html_document
+---
+
+# Objective 
+
+To manipulate the merged tracking data with the other addtional columns for SSFs. To do this, I will: 
+
+1. Determine infected individuals and healthy individuals    
+2. Identify different levels of experiences among each groups and different seasonality  
+3. Select individuals that are applicable for further analysis 
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(dplyr)
+library(readr)
+library(data.table)
+library(DT)
+library(here)
+library(stringr)
+library(tidyr)
+library(purrr)
+library(lubridate)
+library(amt)
+library(ggplot2)
+library(RColorBrewer)
+library(mcp)
+options(width = 150)
+
+# set knitr options 
+opts_chunk$set(fig.width = 6, fig.height = 5, comment = NA)
+```
+
+# Initial data preparation
+
+Read in trk data and select the healthy individual: 21826.2 
+```{r read in data}
+# Location data of the oryx with additional disease columns 
+oryx.healthy <- read_rds(here("data", "trk.healthy.Rdata"))
+oryx.healthy
+
+# select the individual: 21826.2
+#healthy.id <- oryx.healthy %>% filter(id == 21826.2)
+
+# summary of the selected individual 
+#healthy.id %>% dplyr::select(date_released) %>% distinct()
+```
+
+# Segment movements based on the different released time periods 
+
+*[note]*: individuals who were released in 2016-2017, then darted in the field and re-collared in 2021-2022 - we need to segment movements based on the time periods
+- "ranging": released in August 2016 (home ranging formed: ~27 weeks)
+- "penned": released in Jan 2017 (home ranging formed: ~ 35 weeks)
+- "experienced": later released (2021-2022)
+
+Visualize the approx. time periods of the collaring: all the selected healthy individuals are released in 2016 - thus, there is no "penned" individuals in the current dataset.
+```{r healthy mv vis}
+# sl distribution over time 
+ggplot()+
+  geom_density(data = oryx.healthy, aes(as.Date(t_), fill = sl_))+
+  facet_wrap(~id, scales = "free_x")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5))+
+  scale_x_date(date_labels = "%y", date_breaks = "1 year")
+```
+Group the data by experience groups
+```{r experience group}
+# ranging group: less than 2019
+oryx.healthy1 <- oryx.healthy %>% mutate(group = ifelse(year < 2019, "ranging", "experienced"))
+
+oryx.healthy1 %>% glimpse()
+
+# visualize the group of movements 
+ggplot(oryx.healthy1,aes(x_, y_, color = group, group = group))+
+  geom_point()+
+  facet_wrap(~id)
+```
+
+# Group by the seasonal ranges 
+
+Seasonal ranges 
+- Hot dry season: 03.13 ~ 07.10 (day of year 72-191)
+- Rainy season: 07.11 ~ 10.1 (day of year 192-274)
+- Cool dry season: 10.02 ~ 03.12 (day of year 275-71)
+
+In our current dataset, only the rainy and cooldry seasons are present. 4 individuals were tracked during the rainy seasons while 1 individual was collared during the cool dry season. 
+```{r seasonal ranges}
+# create an indicator column that label the different seasonal ranges
+oryx.healthy2 <- oryx.healthy1 %>% 
+  mutate(day_of_year = yday(date_released)) %>% 
+  mutate(season_level = case_when(dplyr::between(day_of_year, 72, 191)~'hotdry',
+                                  dplyr::between(day_of_year, 192, 274)~'rainy')) %>% 
+  mutate(season_level = replace_na(season_level, "cooldry"))
+
+# check the unique seasons across individuals: in our cases, only rainy and cooldry seasons are available 
+oryx.healthy2 %>% dplyr::select(season_level) %>% distinct()
+
+# visualize the group of movements 
+ggplot(oryx.healthy2, aes(x_, y_, color = season_level, group = season_level))+
+  geom_point()+
+  scale_color_brewer(palette = "Dark2")+
+  facet_wrap(~id)
+```
+
+save the grouped data for further analysis 
+```{r save the files}
+#write_rds(oryx.healthy2, path = here("data","trk.healthy.filtered.Rdata"))
+```
+
+
+## Footer
+```{r footer}
+sessionInfo()
+```

@@ -11,7 +11,6 @@ To manipulate the merged tracking data with the other addtional columns for SSFs
 
 1. Determine infected individuals and healthy individuals    
 2. Inspect movement characteristics of individuals 
-3. Compare 
 
 # Document Preamble 
 ```{r preamble, message=FALSE, warning=FALSE}
@@ -70,9 +69,10 @@ long.alive.oryx <- long.alive.oryx[,1:13]
 
 # change the time format of the data 
 long.alive.oryx$date <- as.POSIXct(long.alive.oryx$date, format = "%Y-%m-%d %H:%M:%S")
+long.alive.oryx$date_released <- long.alive.oryx$date_released %>% mdy()
 long.alive.oryx <- long.alive.oryx %>% drop_na() # drop the nas
 
-long.alive.oryx %>% summary()
+long.alive.oryx
 ```
 
 Plot the data 
@@ -99,6 +99,7 @@ oryx.disease %>% group_by(collar_ID, date_released, est_DOD) %>% nest(.)
 
 # change the time format of the data 
 oryx.disease$date <- as.POSIXct(oryx.disease$date, format = "%Y-%m-%d %H:%M:%S")
+oryx.disease$date_released <- oryx.disease$date_released %>% mdy()
 oryx.disease <- oryx.disease %>% drop_na() # drop the nas
 ```
 There are total 4 individuals that are confirmed to be dead by disease: 21819.1, 21839.1, 22112.1,and 29927.0
@@ -117,8 +118,8 @@ ggplot(oryx.disease, aes(x = long,
 Add a track class to the data and summarize the data 
 ```{r amt conversion}
 # make tracks 
-trk.disease <- amt::make_track(oryx.disease, .x=long, .y=lat, .t=date, id = collar_ID, sex = sex, fate = fate, est_DOD = est_DOD) # disease
-trk.alive <- amt::make_track(long.alive.oryx, .x=long, .y=lat, .t=date, id= collar_ID, sex= sex, fate = fate) # healthy 
+trk.disease <- amt::make_track(oryx.disease, .x=long, .y=lat, .t=date, id = collar_ID, sex = sex, fate = fate, est_DOD = est_DOD, date_released = date_released) # disease
+trk.alive <- amt::make_track(long.alive.oryx, .x=long, .y=lat, .t=date, id= collar_ID, sex= sex, fate = fate, date_released = date_released) # healthy 
 
 # calculate day/night from the movement track 
 trk.alive$hour <- hour(trk.alive$t_) # calculate the hour
@@ -262,6 +263,11 @@ disease.kde.vis
 # Individual selection for further analysis
 
 We will select one healthy individual: 21826.2 which shows a less pattern of movement than the other individuals. For the disease-induced individuals, individual 21819.1 can be reasonable to use for comparison analysis. 
+
+```{r save the files}
+#write_rds(trk1.alive, path = here("data","trk.healthy.Rdata"))
+#write_rds(trk1.disease, path = here("data","trk.disease.Rdata"))
+```
 
 ## Footer
 ```{r footer}
