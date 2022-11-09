@@ -58,26 +58,51 @@ oryx.healthy
 - "penned": released in Jan 2017 (home ranging formed: ~ 35 weeks)
 - "experienced": later released (2021-2022)
 
-Visualize the approx. time periods of the collaring: all the selected healthy individuals are released in 2016 - thus, there is no "penned" individuals in the current dataset.
+Visualize the sl distribution over time to briefly check the overall movement of the animals
 ```{r healthy mv vis}
 # sl distribution over time 
-ggplot()+
+sl.vis <- ggplot()+
   geom_density(data = oryx.healthy, aes(as.Date(t_), fill = sl_))+
-  facet_wrap(~id, scales = "free_x")+
+  facet_wrap(~masterID, scales = "free_x")+
   theme(axis.text.x = element_text(angle = 90, vjust = 0.5))+
-  scale_x_date(date_labels = "%y", date_breaks = "1 year")
+  scale_x_date(date_labels = "%y", date_breaks = "1 year")+
+  ggtitle("Step length density over time")
+
+sl.vis
+
+# save the plots 
+#ggsave("sl_time.png", sl.vis, width = 14, height = 11)
 ```
+
+Further investigate to check the data to group different experience animals 
+```{r grouping animals}
+# check the release date - individual B72R35_W277F was released during 2017 - so it must be the "penned" group 
+oryx.healthy %>% nest_by(masterID, date_released, date_collared, prev_collar_ID)
+```
+
 Group the data by experience groups
 ```{r experience group}
-# ranging group: less than 2019
-oryx.healthy1 <- oryx.healthy %>% mutate(group = ifelse(year < 2019, "ranging", "experienced"))
+# only one individual is released during 2017 so filter those individuals and group the experience categories
+B72R35_W277F <- oryx.healthy %>% filter(masterID == "B72R35_W277F") %>% mutate(group = ifelse(year < 2019, "penned", "experienced"))
+
+# rest of the ranging individuals 
+rest.ranging <- oryx.healthy %>% filter(masterID != "B72R35_W277F") %>% mutate(group = ifelse(year < 2019, "ranging", "experienced"))
+
+# rbind the separated individuals 
+oryx.healthy1 <- rbind(B72R35_W277F, rest.ranging)
 
 oryx.healthy1 %>% glimpse()
 
 # visualize the group of movements 
-ggplot(oryx.healthy1,aes(x_, y_, color = group, group = group))+
+exp.vis <- ggplot(oryx.healthy1,aes(x_, y_, color = group, group = group))+
   geom_point()+
-  facet_wrap(~id)
+  facet_wrap(~masterID)+
+  ggtitle("Experience groups of animals")
+
+exp.vis
+
+# save the plots 
+#ggsave("exp_vis.png", exp.vis, width = 14, height = 11)
 ```
 
 # Group by the seasonal ranges 
@@ -100,17 +125,35 @@ oryx.healthy2 <- oryx.healthy1 %>%
 oryx.healthy2 %>% dplyr::select(season_level) %>% distinct()
 
 # visualize the group of movements 
-ggplot(oryx.healthy2, aes(x_, y_, color = season_level, group = season_level))+
+season.vis <- ggplot(oryx.healthy2, aes(x_, y_, color = season_level, group = season_level))+
   geom_point()+
   scale_color_brewer(palette = "Dark2")+
-  facet_wrap(~id)
+  facet_wrap(~masterID)+
+  ggtitle("Seaonsal variation of the data")
+
+season.vis
+
+# save the plots 
+#ggsave("season_vis.png", season.vis, width = 14, height = 11)
+```
+
+Double check the data - ref info by Katherine below
+- Oryx B72R35_W277F (32138.2) should have 1292 days of tracking data for this animal, spanning multiple seasons.
+- Oryx N23B28_Y66F (21826.2) should have 987 days of data across multiple seasons.
+- Oryx R02B23_W88F (21819.2) should have 1873 days of tracking data across multiple seasons.
+- Oryx R14R28_Y70F (data associated with collar serial number 21808.2) should have 1544 days of tracking data, spanning multiple seasons.
+- Oryx R52R29_B494F (38241.1) should have 986 days of data across multiple seasons.
+
+Since we have resampled the original tracking data that it should have more tracking points than the original tracks. The current data seems reasonable for further analysis. 
+```{r individual tracking info}
+# check the number of tracking
+oryx.healthy2 %>% nest_by(masterID) %>% mutate(n_tracking = nrow(data))
 ```
 
 save the grouped data for further analysis 
 ```{r save the files}
 #write_rds(oryx.healthy2, path = here("data","trk.healthy.filtered.Rdata"))
 ```
-
 
 ## Footer
 ```{r footer}

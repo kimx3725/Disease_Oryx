@@ -56,23 +56,31 @@ alive.oryx <- oryx %>% filter(fate == "alive")
 alive.oryx %>% summary()
 
 # time range dataframe
-t.alive.oryx <- alive.oryx %>% dplyr::select(collar_ID, date) %>% nest_by(collar_ID) %>% mutate(min_date = map(data, min),
-                                                                                max_date = map(data, max)) %>% unnest(min_date, max_date) %>% 
-                                                                        mutate(range_time = difftime(max_date, min_date)) %>% dplyr::select(collar_ID, min_date, max_date, range_time)
+t.alive.oryx <- alive.oryx %>% dplyr::select(collar_ID, date) %>% 
+  nest_by(collar_ID) %>% 
+  mutate(min_date = map(data, min),
+         max_date = map(data, max)) %>% unnest(min_date, max_date) %>%                                                                         mutate(range_time = difftime(max_date, min_date)) %>% 
+  dplyr::select(collar_ID, min_date, max_date, range_time)
 
 # Filter the data by only selecting individuals that have more than 2000 days of worth locations
+t.alive.oryx
 t.alive.oryx %>% filter(range_time > 2000)
 
 # 5 individuals total
 long.alive.oryx <- alive.oryx %>% filter(., collar_ID %in% c("21808.2", "21819.2", "21826.2", "32138.2", "38241.1"))
-long.alive.oryx <- long.alive.oryx[,1:13]
+long.alive.oryx <- long.alive.oryx[,1:18]
 
 # change the time format of the data 
 long.alive.oryx$date <- as.POSIXct(long.alive.oryx$date, format = "%Y-%m-%d %H:%M:%S")
 long.alive.oryx$date_released <- long.alive.oryx$date_released %>% mdy()
+long.alive.oryx$date_collared <- long.alive.oryx$date_collared %>% mdy()
+long.alive.oryx <- long.alive.oryx %>% dplyr::filter(!is.na(date))
 long.alive.oryx <- long.alive.oryx %>% drop_na() # drop the nas
 
-long.alive.oryx
+long.alive.oryx %>% summary()
+
+# save the data
+#write_rds(long.alive.oryx, path = here("data","long.healthy.Rdata"))
 ```
 
 Plot the data 
@@ -100,7 +108,14 @@ oryx.disease %>% group_by(collar_ID, date_released, est_DOD) %>% nest(.)
 # change the time format of the data 
 oryx.disease$date <- as.POSIXct(oryx.disease$date, format = "%Y-%m-%d %H:%M:%S")
 oryx.disease$date_released <- oryx.disease$date_released %>% mdy()
+oryx.disease$date_collared <- oryx.disease$date_collared %>% mdy()
+oryx.disease <- oryx.disease %>% dplyr::filter(!is.na(date))
 oryx.disease <- oryx.disease %>% drop_na() # drop the nas
+
+oryx.disease %>% summary()
+
+# save the data
+#write_rds(oryx.disease, path = here("data","disease.Rdata"))
 ```
 There are total 4 individuals that are confirmed to be dead by disease: 21819.1, 21839.1, 22112.1,and 29927.0
 
@@ -118,15 +133,18 @@ ggplot(oryx.disease, aes(x = long,
 Add a track class to the data and summarize the data 
 ```{r amt conversion}
 # make tracks 
-trk.disease <- amt::make_track(oryx.disease, .x=long, .y=lat, .t=date, id = collar_ID, sex = sex, fate = fate, est_DOD = est_DOD, date_released = date_released) # disease
-trk.alive <- amt::make_track(long.alive.oryx, .x=long, .y=lat, .t=date, id= collar_ID, sex= sex, fate = fate, date_released = date_released) # healthy 
+trk.alive <- amt::make_track(long.alive.oryx, .x=long, .y=lat, .t=date, masterID = masterID, collar_id= collar_ID, sex= sex, fate = fate, date_collared = date_collared, date_released = date_released, temp_c = temp_c, prev_collar_ID = prev_collar_ID, date_released = date_released, cause_of_death = cause_of_death) # healthy 
+
+trk.disease <- amt::make_track(oryx.disease, .x=long, .y=lat, .t=date, masterID = masterID, collar_id= collar_ID, sex= sex, fate = fate, date_collared = date_collared, date_released = date_released, temp_c = temp_c, prev_collar_ID = prev_collar_ID, date_released = date_released, cause_of_death = cause_of_death) # disease
 
 # calculate day/night from the movement track 
+
+## healthy
 trk.alive$hour <- hour(trk.alive$t_) # calculate the hour
 trk.alive$tod <- ifelse(trk.alive$hour < 7 | 19 < trk.alive$hour, "night", "day") # day/night
 trk.alive %>% summary()
 
-
+## disease
 trk.disease$hour <- hour(trk.disease$t_) # calculate the hour
 trk.disease$tod <- ifelse(trk.disease$hour < 7 | 19 < trk.disease$hour, "night", "day") # day/night
 trk.disease %>% summary()
@@ -139,7 +157,7 @@ Calculate step lengths and net squared displacements for each individual, then r
 # healthy
 
 # nest data by id and add columns to each nested column of data (sl and nsd)
-trk1.alive <- trk.alive %>% nest_by(id) %>% 
+trk1.alive <- trk.alive %>% nest_by(collar_id) %>% 
   mutate(sl_ = list(step_lengths(data)),
          nsd_ = list(nsd(data))) %>% unnest() %>% ungroup()
 
@@ -155,7 +173,7 @@ trk1.alive <- trk1.alive %>% ungroup()
 # disease
 
 # nest data by id and add columns to each nested column of data (sl and nsd)
-trk1.disease <- trk.disease %>% nest_by(id) %>% 
+trk1.disease <- trk.disease %>% nest_by(collar_id) %>% 
   mutate(sl_ = list(step_lengths(data)),
          nsd_ = list(nsd(data))) %>% unnest()
 
@@ -173,7 +191,7 @@ trk1.disease <- trk1.disease %>% ungroup()
 ```{r nsd visualization}
 ## alive
 alive.nsd.vis <- ggplot(trk1.alive, aes(x = t_, y = nsd_))+ geom_path()+
-  facet_wrap(~id, scales = "free")+
+  facet_wrap(~collar_id, scales = "free")+
   ylab("NSD")+
   xlab("Time")+
   ggtitle("Healthy: NSD over time")
@@ -182,7 +200,7 @@ alive.nsd.vis
 
 ## disease 
 disease.nsd.vis <- ggplot(trk1.disease, aes(x = t_, y = nsd_))+ geom_path()+
-  facet_wrap(~id, scales = "free")+
+  facet_wrap(~collar_id, scales = "free")+
   ylab("NSD")+
   xlab("Time")+
   ggtitle("Disease: NSD over time")
@@ -199,7 +217,7 @@ disease.nsd.vis
 # alive
 alive.sl.dnight <- ggplot(trk1.alive, aes(x= tod, y= log(sl_)))+
   geom_boxplot()+ geom_smooth()+
-  facet_wrap(~id)+
+  facet_wrap(~collar_id)+
   ylab("Log(SL)")+
   xlab("Time of day")+
   ggtitle("Healthy: Step Legnths over time of the day")
@@ -209,7 +227,7 @@ alive.sl.dnight
 # disease 
 disease.sl.dnight <- ggplot(trk1.disease, aes(x= tod, y= log(sl_)))+
   geom_boxplot()+ geom_smooth()+
-  facet_wrap(~id)+
+  facet_wrap(~collar_id)+
   ylab("Log(SL)")+
   xlab("Time of day")+
   ggtitle("Disease: Step Legnths over time of the day")
@@ -226,11 +244,11 @@ disease.sl.dnight
 calculate KDE 
 ```{r KDE calculation, message=FALSE, warning=FALSE}
 # calculate the kde areas per week
-disease.kde.week <- trk.disease %>% mutate(week = week(t_)) %>% nest_by(id, week) %>% 
+disease.kde.week <- trk.disease %>% mutate(week = week(t_)) %>% nest_by(collar_id, week) %>% 
   transmute(kdearea = list(hr_kde(data, levels = 0.95) %>% hr_area)) %>% 
   unnest()
 
-alive.kde.week <- trk.alive %>% mutate(week = week(t_)) %>% nest_by(id, week) %>% 
+alive.kde.week <- trk.alive %>% mutate(week = week(t_)) %>% nest_by(collar_id, week) %>% 
   transmute(kdearea = list(hr_kde(data, levels = 0.95) %>% hr_area)) %>% 
   unnest()
 
@@ -238,7 +256,7 @@ alive.kde.week <- trk.alive %>% mutate(week = week(t_)) %>% nest_by(id, week) %>
 alive.kde.vis <- ggplot(alive.kde.week, aes(x = week, y = area))+
   geom_point()+
   geom_smooth()+
-  facet_wrap(~id, scales = "free")+
+  facet_wrap(~collar_id, scales = "free")+
   xlab("Week")+
   ylab("KDE area")+
   ggtitle("Healthy: Kernel Density Estimation (KDE) over time (weeks)")
@@ -248,7 +266,7 @@ alive.kde.vis
 disease.kde.vis <- ggplot(disease.kde.week, aes(x = week, y = area))+
   geom_point()+
   geom_smooth()+
-  facet_wrap(~id, scales = "free")+
+  facet_wrap(~collar_id, scales = "free")+
   xlab("Week")+
   ylab("KDE area")+
   ggtitle("Disease: Kernel Density Estimation (KDE) over time (weeks)")
