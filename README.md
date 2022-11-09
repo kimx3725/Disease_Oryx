@@ -1,1 +1,24 @@
 # Disease_Oryx
+
+## Codes 
+- 1.explore_data_analysis.Rmd
+  - Determine appropriate id and tracking information in the data.  
+  - Merge the ID and tracking data into a single dataset. 
+
+- 2.inspect_data.Rmd:
+  - Determine infected individuals and healthy individuals  
+  - Inspect movement characteristics of individuals 
+
+- 2.identify_exp_season.Rmd: 
+  - Determine infected individuals and healthy individuals    
+  - Identify different levels of experiences among each groups and different seasonality
+  - Select individuals that are applicable for further analysis
+  
+## Data
+- trk.healthy.filtered.Rdata
+  - Tracking data with seasonality and experience groups 
+- trk.healthy.Rdata
+  - original tracking data for healthy individuals 
+- trk.disease.Rdata
+  - original disease tracking data 
+
