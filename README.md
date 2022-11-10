@@ -16,9 +16,9 @@
   
 ## Data
 - trk.healthy.filtered.Rdata
-  - Tracking data with seasonality and experience groups 
+  - Tracking data with seasonality and experience groups (amt object)
 - trk.healthy.Rdata
-  - original tracking data for healthy individuals 
+  - original tracking data for healthy individuals (amt object)
 - trk.disease.Rdata
-  - original disease tracking data 
+  - original disease tracking data (amt object)
 
