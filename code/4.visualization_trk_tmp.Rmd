@@ -1,0 +1,254 @@
+---
+title: "4.visualization_trk_temp"
+author: "Dennis Kim"
+date: "2022-11-27"
+output: html_document
+---
+
+# Objective 
+
+To visualize animal tracking per different groups and environmental factors. To do this, I will: 
+
+1. Create animations of individual tracking based on temperature dynamics 
+2. Find a reasonable way to visualize the each individual grouped by different indexes 
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(here)
+library(tidyverse)
+library(rnaturalearth)
+library(gganimate)
+library(amt)
+library(move)
+library(moveVis)
+library(lubridate)
+options(width = 150)
+
+# set knitr options 
+opts_chunk$set(fig.width = 6, fig.height = 5, comment = NA)
+```
+
+# Initial data preparation
+
+Read the filtered dataset for healthy and disease individuals and basemap data
+```{r read in data}
+# get basemap data
+bg = rnaturalearth::ne_countries(scale = "small", returnclass = "sf")
+
+# healthy individual
+healthy  <- read_rds(here("data", "trk.healthy.filtered.Rdata"))
+healthy 
+
+# disease individual
+disease <- read_rds(here("data", "trk.disease.Rdata"))
+disease 
+```
+
+Before calculating speed of animals, we would like to find the regularized time stamps for the individuals 
+```{r regular time}
+# first, convert the data to trk object through amt 
+
+## healthy 
+healthy.trk <- amt::make_track(healthy, .x=x_, .y=y_, .t=t_, crs=CRS("+init=epsg:32634"), collar_id=collar_id, fate=fate, temp_c=temp_c, cause_of_death=cause_of_death, group=group, season_level=season_level)
+
+healthy.trk %>% summary() 
+
+## disease 
+disease.trk <- amt::make_track(healthy, .x=x_, .y=y_, .t=t_, crs=CRS("+init=epsg:32634"), collar_id=collar_id, fate=fate, temp_c=temp_c, cause_of_death=cause_of_death, season_level=season_level)
+
+disease.trk %>% summary()
+```
+
+Summarize the sampling rates of the bear 
+```{r sampling rates}
+# mean sampling rate: 3484.722 secs = approx. 1hr
+summarize_sampling_rate(healthy.trk)
+summarize_sampling_rate(disease.trk)
+```
+
+resample the track
+```{r resample trk}
+# resample with regularizing one hour with tolerance 15 mins
+healthy.trk <- healthy.trk %>% amt::track_resample(rate = hours(1), tolerance = minutes(15))
+disease.trk <- disease.trk %>% amt::track_resample(rate = hours(1), tolerance = minutes(15))
+
+healthy.trk
+disease.trk
+```
+
+
+convert the tracking data to move object 
+```{r move object}
+# healthy move object
+healthy.mv <- moveVis::df2move(healthy.trk, proj = "+init=epsg:32634", x = 'x_', y = 'y_', time = 't_', track_id = 'collar_id', data = healthy.trk)
+healthy.mv %>% as.data.frame()
+
+# disease move object 
+disease.mv <- moveVis::df2move(disease.trk, proj = "+init=epsg:32634", x = 'x_', y = 'y_', time = 't_', track_id = 'collar_id', data = disease.trk)
+disease.mv
+```
+
+calculate the speed of each individual tracking 
+```{r calculate speed}
+# healthy 
+# only select the columns that will be used for further analysis 
+healthy.df <- healthy.mv %>% as.data.frame() %>% dplyr::select(collar_id, x_, y_, t_, temp_c, fate, group, season_level)
+# calculate the speed (m/s) belongs to the each segment
+healthy.df$speed <- unlist(lapply(speed(healthy.mv),c,NA))
+# check the data
+healthy.df %>% summary()
+
+# disease - apply the same framework as above
+disease.df <- disease.mv %>% as.data.frame() %>% dplyr::select(collar_id, x_, y_, t_, temp_c, fate, season_level)
+disease.df$speed <- unlist(lapply(speed(disease.mv), c, NA))
+disease.df %>% summary()
+```
+
+# Process your data 
+
+First, calculate daily average positions and speeds. Then, create table with all possible combinations of collar ID and date to merge with the existing data to include NAs on missing GPS days to prevent a line break when plotting. 
+```{r process data}
+# compute daily average positions and speeds 
+healthy.daily <- healthy.df %>%
+  mutate(date = as.Date(t_)) %>% 
+  group_by(collar_id, date) %>% 
+  summarise(
+    lon = mean(x_, na.rm = TRUE), 
+    lat = mean(y_, na.rm = TRUE),
+    spd = mean(speed, na.rm = TRUE),
+    temp = mean(temp_c, na.rm = TRUE),
+    season = season_level
+  )
+
+# check the data
+healthy.daily
+
+# create 'ideal' data with all combinations of data 
+ideal = expand_grid(
+  id = unique(healthy.daily$collar_id),
+  date = seq.Date(from = min(healthy.daily$date), to = max(healthy.daily$date), by = 1)
+)
+
+# create compelte dataset 
+df_all = left_join(ideal, healthy.daily)
+
+df_all
+```
+
+# Visualization 
+
+plot the visualization indicating that the point color indicates themperatures and the linestring colors indicates of speed 
+```{r visualization1}
+# only select the one individual to check
+df_21808.2 <- df_all %>% filter(id == "21808.2") %>% filter(!is.na(season))
+df_21808.2
+
+# movement paths and temperature dyanmics 
+single.id.vis <- ggplot()+
+  # basemap
+  geom_sf(data = bg)+
+  coord_sf(xlim = range(df_all$lon, na.rm=TRUE),
+           ylim = range(df_all$lat, na.rm=TRUE),
+           expand = TRUE)+
+  # lines and points 
+  geom_path(data = df_21808.2,
+            aes(x=lon, y=lat, group=id, colour=spd),
+            alpha=0.3)+
+  ggnewscale::new_scale_colour() +
+   geom_point(data = df_21808.2,
+             aes(x=lon, y=lat, group = id, colour=temp),
+             alpha = 0.7, size = 2)+
+  scale_color_viridis_c(option = "inferno")+
+  labs(x=NULL, y=NULL,
+         theme_dark()+
+         theme(panel.grid = element_blank()))+
+  facet_wrap(~season)
+
+single.id.vis
+```
+
+By looking at the visualization of speed vs temperature over monthly intervals, we see the temperature between 30 and 33 shows the peak of the speed of the individual 21808.2
+```{r visualization2}
+# filter out the NA and max (outlier) values of speed for further data inspection
+df_21808.2 <- df_21808.2 %>%  filter(!is.na(spd)) %>% filter(spd != max(spd))
+df_21808.2
+
+# monthly data modification
+df_21808.2.month <- df_21808.2 %>% mutate(month = format(as.Date(date), "%Y-%m")) %>% group_by(month) %>% 
+  summarise(
+    lon = mean(lon, na.rm = TRUE), 
+    lat = mean(lat, na.rm = TRUE),
+    spd = mean(spd, na.rm = TRUE),
+    temp = mean(temp, na.rm = TRUE),
+    month = month,
+    season = season,
+    date = date
+  ) %>% 
+  ungroup()
+
+df_21808.2.month
+
+# spd vs temp over continuous time periods (days)
+spd.tmp.daily <- ggplot(df_21808.2, aes(x=temp, y=spd))+
+  geom_point(aes(col=season))+
+  geom_smooth(method="loess", se=F)+
+  facet_wrap(~season, scales="free")+
+  ylab("Speed (m/s)")+
+  xlab("Temperature (C)")+
+  ggtitle("ID21808.2: Daily speed vs temperature between two seasons")
+
+spd.tmp.daily
+
+# save the plot 
+#ggsave("spd_temp_daily_vis.png", spd.tmp.daily, width = 12, height = 7)
+
+# spd vs temp over monthly periods (month)
+spd.tmp.month <- ggplot(df_21808.2.month, aes(x=temp, y=spd))+
+  geom_point(aes(col=season))+
+  geom_smooth(method="loess", se=F)+
+  facet_wrap(~season, scales="free")+
+  ylab("Speed (m/s)")+
+  xlab("Temperature (C)")+
+  ggtitle("ID21808.2: Monthly speed vs temperature between two seasons")
+
+spd.tmp.month
+
+# save the plot 
+#ggsave("spd_temp_month_vis.png", spd.tmp.month, width = 12, height = 7)
+
+# speed vs monthly time with an indicator of temp 
+ggplot(df_21808.2.month, aes(x=month, y=spd))+
+  geom_point(aes(col=temp), size = 2)+
+  geom_smooth(method="loess", se=F)+
+  scale_color_viridis_c(option = "inferno")+
+  facet_wrap(~season, scales="free")+ 
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+# save the plots 
+#ggsave("season_vis.png", season.vis, width = 14, height = 11)
+```
+
+# animate 
+
+animate the oryx movement 
+```{r animation}
+# animate 
+anim = single.id.vis+
+  transition_reveal(along=date)+
+  ease_aes("linear")+
+  ggtitle("Date: {frame_along}")
+
+# animate the visualization
+gganimate::animate(anim, height = 1000, width = 1000, fps = 2)
+
+# save the animation
+anim_save("id_21808.2.move.temp.spd.gif", width = 1000, height = 1000)
+```
+
+
+# Footer
+```{r footer}
+sessionInfo()
+```
