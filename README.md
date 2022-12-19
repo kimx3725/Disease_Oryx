@@ -9,7 +9,7 @@
   - Determine infected individuals and healthy individuals  
   - Inspect movement characteristics of individuals 
 
-- 2.identify_exp_season.Rmd: 
+- 3.identify_exp_season.Rmd: 
   - Determine infected individuals and healthy individuals    
   - Identify different levels of experiences among each groups and different seasonality
   - Select individuals that are applicable for further analysis
