@@ -13,6 +13,10 @@
   - Determine infected individuals and healthy individuals    
   - Identify different levels of experiences among each groups and different seasonality
   - Select individuals that are applicable for further analysis
+
+- 4.visualization_trk_tmp.Rmd:
+  - Calculate the speed of the individual 21808.2
+  - Visualize the relationship beween the collared temperature and the speed of the individual 
   
 ## Data
 - trk.healthy.filtered.Rdata
