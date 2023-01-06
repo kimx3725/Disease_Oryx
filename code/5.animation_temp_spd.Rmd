@@ -1,0 +1,195 @@
+---
+title: "5.animation_temp_spd"
+author: "Dennis Kim"
+date: "2022-12-27"
+output: html_document
+---
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(here)
+library(tidyverse)
+library(gganimate)
+library(lubridate)
+library(raster)
+library(magick)
+library(date)
+options(width = 150)
+
+# set knitr options 
+opts_chunk$set(fig.width = 6, fig.height = 5, comment = NA)
+
+# Working Directory
+#setwd(paste0(getwd(),"/JStabach_Oryx/"))
+
+# Output Directory
+dir <- "./Output"
+
+if (!dir.exists(dir)){
+  dir.create(dir)
+  print ("Creating Directory!")
+} else {
+  print("Directory already exists!")
+}
+```
+
+# Read data 
+```{r read in data}
+# read the data
+health <- read.csv(here::here("data", "health_oryx_tmp_speed.csv"))
+disease <- read.csv(here::here("data", "infect_oryx_tmp_speed.csv"))
+
+# individual 21808.2
+oryx.21808.2 <- health %>% filter(collar_id == "21808.2") %>% filter(!is.na(speed))
+
+# summary of the data 
+summary(oryx.21808.2)
+```
+
+# Dataset processing/cleaning
+```{r data cleaning}
+# Specify if you want the temperature output
+Temp = "Yes"
+
+# Remove if Lat/Long fields are NA
+oryx.21808.2 <- oryx.21808.2[complete.cases(oryx.21808.2[,3:4]),]
+
+# Make sure date field is in the correct format
+oryx.21808.2$date <- as.POSIXct(oryx.21808.2$t_, format = "%Y-%m-%d %H:%M:%S", tz = "Africa/Ndjamena")
+
+# Create Julian date field
+year <- as.integer(format(oryx.21808.2$date, "%Y"))
+month <- as.integer(format(oryx.21808.2$date, "%m"))
+day <- as.integer(format(oryx.21808.2$date, "%d"))
+
+# Append Julian Date
+oryx.21808.2$Julian <- mdy.date(month, day, year, nineteen=TRUE, fillday=FALSE, fillmonth=FALSE)
+
+# Make sure dataset is in order
+N.order <- order(oryx.21808.2$collar_id, oryx.21808.2$date, decreasing=FALSE)
+oryx.21808.2 <-oryx.21808.2[N.order,]
+
+oryx.21808.2
+```
+
+# Set up Plot Parameters
+
+Set the plot titles and the minima and maxima for each of the individual plots from each axis. These will be used to standardize the plots across the entire time period.
+```{r setup paramters}
+# Establish plot min and max
+min.X <- min(oryx.21808.2$x_,na.rm=TRUE)
+max.X <- max(oryx.21808.2$x_,na.rm=TRUE)
+min.Y <- min(oryx.21808.2$y_,na.rm=TRUE)
+max.Y <- max(oryx.21808.2$y_,na.rm=TRUE)
+
+min.Time <- min(oryx.21808.2$date,na.rm=TRUE)
+max.Time <- max(oryx.21808.2$date,na.rm=TRUE)
+
+min.dist <-min(oryx.21808.2$sl_/1000,na.rm=TRUE)
+max.dist <-max(oryx.21808.2$sl_/1000,na.rm=TRUE)
+
+min.Temp <- min(oryx.21808.2$temp_c,na.rm=TRUE)
+max.Temp <- max(oryx.21808.2$temp_c,na.rm=TRUE)
+
+# Set the Plot Titles
+Title1 = paste0("oryx.21808.2 ",unique(oryx.21808.2$collar_id),": Observed Movement")
+
+# Add a clause to determine how Title 2 should be displayed.  This depends on the Temp argument above
+if (Temp=="Yes") {Title2 = paste0("Movement/Temperature")} else {Title2 = paste0("Movement")}
+```
+
+# Plot the results 
+
+```{r plot}
+# Create a unique variable (day) to loop over for animation
+Days.unique <- unique(oryx.21808.2$Julian)
+    
+# Create Null dataset to hold current day for display   
+Day.new <- NULL
+
+plot(oryx.21808.2$x,oryx.21808.2$y,type="n",lwd=1.5,xlim=c(min.X,max.X),ylim=c(min.Y,max.Y),xlab="Easting",ylab="Northing",asp=1,bty="n",axes=FALSE,frame.plot=TRUE,main=Title1)
+    mtext(paste0(format(oryx.21808.2$date[1],"%Y-%m-%d")," to ",format(oryx.21808.2$date[nrow(oryx.21808.2)],"%Y-%m-%d")),cex=0.75)
+    Axis(side=1, labels=TRUE)
+    Axis(side=2, labels=TRUE)
+
+# Loop through unique days
+for (i in 1:length(Days.unique)){
+  
+  outfile = paste0(dir,"/Oryx_Animation_",unique(oryx.21808.2$collar_id),"_",Days.unique[i],".png")
+  png(file = outfile,width=1000, height=800)
+  layout(matrix(c(1,1,2,3), 2, 2, byrow = FALSE), widths=1, heights=c(1,1))
+         par(mar=c(5.1,4.1,4.1,5.1))
+
+    # Create blank plot
+    plot(oryx.21808.2$x,oryx.21808.2$y,type="n",lwd=1.5,xlim=c(min.X,max.X),ylim=c(min.Y,max.Y),xlab="Easting",ylab="Northing",asp=1,bty="n",axes=FALSE,frame.plot=TRUE,main=Title1)
+    mtext(paste0(format(oryx.21808.2$date[1],"%Y-%m-%d")," to ",format(oryx.21808.2$date[nrow(oryx.21808.2)],"%Y-%m-%d")),cex=0.75)
+    Axis(side=1, labels=TRUE)
+    Axis(side=2, labels=TRUE)
+    
+    # Place Scale Bar
+    scalebar(20000,xy=c(max.X-20000,min.Y),type='line',label=c("20 km"),lwd=1)
+    
+    # Create subset
+    Day.sub <- subset(oryx.21808.2, Julian <= Days.unique[i])
+    
+    # This part is just here so that the current day can be drawn in a different color...allows to be clearly seen in animation
+    if(i==1)
+        {Day.new <- Day.sub
+            } else {
+        Day.new <- subset(oryx.21808.2, Julian == Days.unique[i])
+            }
+            
+    # Calculate the time from release date  
+    time.diff <- trunc(difftime(format(Day.new[1,3],tz="Africa/Ndjamena"),format("2016-08-13 00:00:00",tz="Africa/Ndjamena"),units="days")) 
+    
+    # Print the Date and Number of Animals
+    # ************************************  
+    # Grab first date/time
+    Date.txt <- Day.new[1,3]
+        
+    # Output the date
+    text(min.X,max.Y+10000,paste0("Date: ",format(Date.txt, "%d/%m/%Y")),pos=4,cex=0.9)
+    
+    lines(Day.sub$x,Day.sub$y,lwd=1,col="gray")
+    lines(Day.new$x,Day.new$y,lwd=2,col="blue")
+    
+    # Plot the Release Site
+    points(oryx.21808.2$x[1],oryx.21808.2$y[1],pch=17,cex=1,col="green")
+    
+    # Plot the movements over time (Velocity)
+    plot(oryx.21808.2$date,oryx.21808.2$dist/1000,type="n",lwd=1.5,xlim=c(min.Time,max.Time),ylim=c(min.dist,max.dist+2),bty="n",xlab="",ylab="",axes=TRUE,frame.plot=TRUE,main=Title2)
+    lines(Day.sub$date, Day.sub$dist/1000, type='l', col="gray")
+    lines(Day.new$date, Day.new$dist/1000, type='l', col="blue")
+        # Calculate the tiem from release date  
+        mtext(paste0(abs(time.diff)," days"),cex=0.75)
+        mtext(side = 2,line=2.5, "Velocity (km/hr)",cex=0.9,col="blue")
+        mtext(side = 1,line=2.5, "Days Since Release",cex=0.9,col="black")
+    
+    # Temperature data will be plotted here, if "Yes" above
+    if(Temp=="Yes"){
+        # Convert the Temperature data....to just provide the max observed across the day.
+        Day.sub3 <- aggregate(list(Temp = Day.sub$Temp,Date = Day.sub$date), list(Day = as.numeric(Day.sub$Julian)), max, na.rm=TRUE)   
+        Day.sub4 <- aggregate(list(Temp = Day.new$Temp,Date = Day.new$date), list(Day = as.numeric(Day.new$Julian)), max, na.rm=TRUE)
+    
+        par(new = T)#,mar=c(5.1,4.1,4.1,5.1))
+            with(oryx.21808.2, plot(date,Temp,xlab=NA, ylab=NA, axes=FALSE,type="n",xlim=c(min.Time,max.Time),ylim=c(min.Temp,max.Temp)))
+                lines(Day.sub3$Date,Day.sub3$Temp,col="dark red")
+                points(Day.sub4$Date,Day.sub4$Temp,pch=15,cex=0.75,col="red")
+                axis(side = 4)
+                mtext(side = 4, line = 2.5, "Max. Temperature (C)",cex=0.9,col="red")
+                }
+    dev.off()
+    
+    # If using R Console, can simply output using the following syntax
+    #outfile = paste0(dir,"/Oryx_Animation_",unique(oryx.21808.2$ID),"_",Days.unique[i])
+    #savePlot(filename = outfile,type = c("png"), device = dev.cur(),restoreConsole = TRUE)
+}
+```
+
+
+# Footer
+```{r footer}
+sessionInfo()
+```
