@@ -1,0 +1,80 @@
+---
+title: "8.finalize_data"
+author: "Dennis Kim"
+date: "2023-01-24"
+output: html_document
+---
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(here)
+library(tidyverse)
+library(lubridate)
+library(amt)
+library(sf)
+
+options(width = 150)
+
+# set knitr options 
+opts_chunk$set(fig.width = 6, fig.height = 5, comment = NA)
+```
+
+# Read Data
+
+Tracking data
+```{r read data}
+# read the tracking data: healthy & infected individuals
+health <- read.csv(here::here("data", "healthy_inds_BC.csv"))
+health$t_ <- as.POSIXct(health$t_)
+health %>% head()
+
+disease <- read.csv(here::here("data", "infected_inds_BC.csv"))
+disease$t_ <- as.POSIXct(disease$t_)
+disease %>% head()
+```
+
+Environmental data 
+```{r env layers}
+# NDVI
+NDVI <- read_rds(here::here("data/env_data", "NDVI_totaly.Rdata"))
+colnames(NDVI)[8:9] <- c("x_", "y_") # change the coordinate col names to match with the original data
+NDVI <- NDVI %>% dplyr::select(masterID, x_, y_, t_, NDVI)
+head(NDVI)
+
+# Precipitation
+precip <- read_rds(here::here("data/env_data", "PRC_totaly.Rdata"))
+colnames(precip)[8:9] <- c("x_", "y_") # change the coordinate col names to match with the original data
+precip <- precip %>% dplyr::select(masterID, x_, y_, t_, total_precipitation)
+head(precip)
+```
+
+# Data merge 
+
+merge the environmental values to the original data
+```{r data merge}
+# merge the health data
+health.df <- health %>% left_join(NDVI, by = c("masterID", "x_", "y_", "t_")) # NDVI 
+health.df <- health.df %>% left_join(precip, by = c("masterID", "x_", "y_", "t_")) # total precipitation 
+health.df 
+
+# merge the disease data 
+disease.df <- disease %>% left_join(NDVI, by = c("masterID", "x_", "y_", "t_"))
+disease.df <- disease.df %>% left_join(precip, by = c("masterID", "x_", "y_", "t_")) # total precipitation 
+disease.df 
+```
+
+save the finalized merged data 
+```{r data save}
+# Healthy 
+#write_csv(health.df, path = here::here("data/finalized_data/healthy_final.csv"))
+
+# Disease 
+#write_csv(disease.df, path = here::here("data/finalized_data/infected_final.csv"))
+```
+
+# Footer
+```{r footer}
+sessionInfo()
+```
