@@ -1,0 +1,312 @@
+---
+title: "R01M_data_process"
+author: "Dennis Kim"
+date: "2022-10-03"
+output: html_document
+---
+
+# Objective 
+
+To manipulate the merged tracking data with the other addtional columns for SSFs. To do this, I will: 
+
+1. Determine focal oryx individual that has a history of infection over the time - Oryx R01M/collar 21815.2 
+2. Inspect movement characteristics of individuals 
+3. Resample the tracking data and generate the random steps as amt format 
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(dplyr)
+library(readr)
+library(data.table)
+library(DT)
+library(here)
+library(stringr)
+library(tidyr)
+library(purrr)
+library(lubridate)
+library(amt)
+library(ggplot2)
+options(width = 150)
+
+# set knitr options 
+opts_chunk$set(fig.width = 6, fig.height = 5, comment = NA)
+```
+
+# Data download and initial preparation
+
+Read in the gps data and 
+```{r read in data}
+# Location data of the oryx with additional disease columns 
+oryx <- read.csv(here::here("data", "oryx_gps_id.csv"))
+
+# NAs in fate column convert to unkown
+oryx$fate[is.na(oryx$fate)] <- "unknown"
+
+# summary of the location data 
+summary(oryx)
+```
+
+## R01M
+
+Oryx R01M/collar 21815.2 was released on 8/6/2018, discovered in poor condition in Sept 2018 (i.e., during the RVF / massive mortality event), treated in the field by a veterinarian, and survived until Feb 2020 (when he died due to male-male aggression).
+
+```{r R01M data}
+# fitler the 1 individual you need
+R01M <- oryx %>% filter(collar_ID == "21815.2")
+
+# change the time format of the data 
+R01M$date <- as.POSIXct(R01M$date, format = "%Y-%m-%d %H:%M:%S")
+R01M$date_released <- R01M$date_released %>% mdy()
+R01M$date_collared <- R01M$date_collared %>% mdy()
+R01M <- R01M %>% dplyr::filter(!is.na(date))
+R01M <- R01M %>% drop_na() # drop the nas
+
+R01M %>% summary()
+
+# save the data
+#write_rds(R01M, path = here("data","R01M.Rdata"))
+```
+
+Plot the data 
+```{r alive plots}
+# facet id plots
+ggplot(R01M, aes(x = long,
+                         y = lat))+ geom_point()+
+  ggtitle("Locations of R01M")
+```
+
+# Amt conversion 
+
+Add a track class to the data and summarize the data 
+```{r amt conversion}
+# make tracks 
+trk.R01M <- amt::make_track(R01M, .x=long, .y=lat, .t=date, masterID = masterID, collar_id= collar_ID, sex= sex, fate = fate, date_collared = date_collared, date_released = date_released, temp_c = temp_c, prev_collar_ID = prev_collar_ID, date_released = date_released, cause_of_death = cause_of_death) # healthy 
+```
+
+calculate day/night from the movement track
+```{r day and night}
+# calculate day/night from the movement track 
+trk.R01M$hour <- hour(trk.R01M$t_) # calculate the hour
+trk.R01M$tod <- ifelse(trk.R01M$hour < 7 | 19 < trk.R01M$hour, "night", "day") # day/night
+trk.R01M %>% summary()
+```
+
+# Movement characteristics 
+
+Calculate step lengths and net squared displacements for each individual, then rbind the data back together. 
+```{r movement characteristics}
+# calculate year, month, week of observation, step lengths and net squared displacements
+trk1.R01M <- trk.R01M %>% mutate(year = year(t_),
+                    month = lubridate::month(t_, label = TRUE),
+                    week = week(t_),
+                    sl_ = step_lengths(.),
+                    nsd_ = nsd(.))
+
+summary(trk1.R01M)
+```
+
+## Net-squared displacement over time for each individual 
+```{r nsd visualization}
+## alive
+R01M.nsd.vis <- ggplot(trk1.R01M, aes(x = t_, y = nsd_))+ geom_path()+
+  facet_wrap(~collar_id, scales = "free")+
+  ylab("NSD")+
+  xlab("Time")+
+  ggtitle("R01M: NSD over time")
+
+R01M.nsd.vis
+
+# save the plot 
+#ggsave("R01M_nsd.png", R01M.nsd.vis, width = 14, height = 11)
+```
+
+## Step length distribution by day/night 
+```{r sl visualization, message=FALSE, warning=FALSE}
+# alive
+R01M.sl.dnight <- ggplot(trk1.R01M, aes(x= tod, y= log(sl_)))+
+  geom_boxplot()+ geom_smooth()+
+  facet_wrap(~collar_id)+
+  ylab("Log(SL)")+
+  xlab("Time of day")+
+  ggtitle("R01M: Step Legnths over time of the day")
+
+R01M.sl.dnight
+
+# save the plot 
+#ggsave("R01M_sl_dnight.png", R01M.sl.dnight, width = 14, height = 11)
+```
+
+## Space us (KDE) by week 
+
+calculate KDE 
+```{r KDE calculation, message=FALSE, warning=FALSE}
+# calculate the kde areas per week
+R01M.kde.week <- trk1.R01M %>% nest_by(collar_id, week) %>% 
+  transmute(kdearea = list(hr_kde(data, levels = 0.95) %>% hr_area)) %>% 
+  unnest()
+
+# kde overweek visualization 
+R01M.kde.vis <- ggplot(R01M.kde.week, aes(x = week, y = area))+
+  geom_point()+
+  geom_smooth()+
+  facet_wrap(~collar_id, scales = "free")+
+  xlab("Week")+
+  ylab("KDE area")+
+  ggtitle("R01M: Kernel Density Estimation (KDE) over time (weeks)")
+
+R01M.kde.vis
+
+# save the plots 
+#ggsave("R01M_kde.png", R01M.kde.vis, width = 14, height = 11)
+```
+```{r save the files}
+#write_rds(trk1.R01M, path = here("data","trk.R01M.Rdata"))
+```
+
+# Group by segment movements based on the different released time periods (experience)
+*[note]*: individuals who were released in 2016-2017, then darted in the field and re-collared in 2021-2022 - we need to segment movements based on the time periods
+- "ranging": released in August 2016 (home ranging formed: ~27 weeks)
+- "penned": released in Jan 2017 (home ranging formed: ~ 35 weeks)
+- "experienced": later released (2021-2022)
+
+Visualize the sl distribution over time to briefly check the overall movement of the animals
+```{r mv vis}
+# sl distribution over time 
+sl.vis <- ggplot()+
+  geom_density(data = trk1.R01M, aes(as.Date(t_), fill = sl_))+
+  facet_wrap(~masterID, scales = "free_x")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5))+
+  scale_x_date(date_labels = "%m", date_breaks = "1 month")+
+  ggtitle("Step length density over time")
+
+sl.vis
+
+# save the plots 
+#ggsave("sl_time.png", sl.vis, width = 14, height = 11)
+```
+
+Further investigate to check the data to group different experience animals 
+```{r grouping animals}
+# check the release date - individual B72R35_W277F was released during 2017 - so it must be the "penned" group 
+trk1.R01M %>% nest_by(masterID, date_released, date_collared, prev_collar_ID)
+```
+
+# Groupy by the seasonal ranges 
+
+Seasonal ranges 
+- Hot dry season: 03.13 ~ 07.10 (day of year 72-191)
+- Rainy season: 07.11 ~ 10.1 (day of year 192-274)
+- Cool dry season: 10.02 ~ 03.12 (day of year 275-71)
+
+In our current dataset, only the rainy season is available.
+```{r seasonal ranges}
+# create an indicator column that label the different seasonal ranges
+trk2.R01M <- trk1.R01M %>% 
+  mutate(day_of_year = yday(t_)) %>% 
+  mutate(season_level = case_when(dplyr::between(day_of_year, 72, 191)~'hotdry',
+                                  dplyr::between(day_of_year, 192, 274)~'rainy')) %>% 
+  mutate(season_level = replace_na(season_level, "cooldry"))
+
+# check the unique seasons across individuals: in our cases, only rainy and cooldry seasons are available 
+trk2.R01M %>% dplyr::select(season_level) %>% distinct()
+
+# visualize the group of movements 
+season.vis <- ggplot(trk2.R01M, aes(x_, y_, color = season_level, group = season_level))+
+  geom_point()+
+  scale_color_brewer(palette = "Dark2")+
+  facet_wrap(~masterID)+
+  ggtitle("Seaonsal variation of the data: R01M")
+
+season.vis
+
+# save the plots 
+#ggsave("season_vis.png", season.vis, width = 14, height = 11)
+```
+
+save the grouped data for further analysis 
+```{r save the files}
+#write_rds(trk2.R01M, path = here("data","trk_R01M_seasons.Rdata"))
+```
+
+# Temperature visualization
+
+visualize the relationship between speed and temperature by initial data visualization
+```{r speed vs tmp}
+# calculate speed
+trk2.R01M <- trk2.R01M %>% mutate(speed = amt::speed(.))
+
+# visualize temp vs speed over time 
+qplot(speed, temp_c, data = trk2.R01M, color = factor(year), geom = c("point","smooth"),facets = .~year)
+```
+
+# Merge body condition 
+
+read the body condition data 
+```{r body condition}
+# read the body condition data 
+body_condition <- read.csv(here::here("data", "oryx_individual_field_data_122322.csv"))
+
+# only select the columns that are applicable to the data 
+body_condition <- body_condition %>% dplyr::select(datetime, animalID, lat, long, body_condition)
+
+# filter the data with non-NAs for body condition values 
+body_condition <- body_condition[complete.cases(body_condition[, 5]),]
+
+summary(body_condition)
+```
+
+filter the body condition data for R01M and join the data 
+```{r R01M Bc}
+# change the column name of the body condition same as the original tracking data 
+colnames(body_condition) <- c("t_", "masterID", "y_", "x_", "body_condition")
+
+# select the healthy individuals for our cases 
+R01M.BC <- body_condition %>% filter(masterID == "R01M")
+
+# create julian dates and week id for the original data and BC data
+trk2.R01M <- trk2.R01M %>% 
+  mutate(julian = yday(t_))
+
+R01M.BC <- R01M.BC %>% 
+  mutate(
+          julian = yday(t_),
+          week = week(t_)
+          ) 
+
+# calculate the average body condition value based on each duplicated week
+average.week.BC <- R01M.BC %>% group_by(week) %>% 
+  mutate(avg.bc = mean(body_condition)) %>% 
+  dplyr::select(week, avg.bc) %>% 
+  distinct()
+
+average.week.BC
+
+# join the data
+trk3.R01M <- trk2.R01M %>% left_join(average.week.BC, by = c("week"))
+
+# only select complete data with body condition
+comp.trk.R01M <- trk3.R01M %>% filter(!is.na(avg.bc))
+
+comp.trk.R01M %>% head()
+```
+
+```{r save the healthy body condition data}
+# save the data 
+#write_rds(comp.trk.R01M, path = here("data","comp.R01M.Rdata"))
+#write_csv(comp.trk.R01M, path = here("data", "comp.R01M.csv"))
+```
+
+visualize the relationship between body condition and time 
+```{r bd timeline}
+barplot(month, avg.bc, data=comp.trk.R01M, color = factor(year), geom = c("point", "smooth"), facets = .~year)
+
+comp.trk.R01M %>% select(year, month, avg.bc) %>% ggplot(aes(month, fill = factor(avg.bc)))+geom_line(alpha = 0.4)+ facet_wrap(~year)
+```
+
+
+# Footer
+```{r footer}
+sessionInfo()
+```

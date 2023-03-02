@@ -1,0 +1,115 @@
+---
+title: "final_Pre_amt_data_R01M"
+author: "Dennis Kim"
+date: "2023-02-09"
+output: html_document
+---
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(here)
+library(tidyverse)
+library(lubridate)
+library(amt)
+library(sf)
+
+options(width = 150)
+
+# set knitr options 
+opts_chunk$set(fig.width = 6, fig.height = 5, comment = NA)
+```
+
+# Read Data
+
+Tracking data
+```{r read data}
+# read the tracking data: R01M
+R01M <- read_rds(here::here("data", "comp.R01M.Rdata"))
+R01M %>% head()
+```
+
+Environmental data 
+```{r env layers}
+# NDVI
+NDVI <- read_rds(here::here("data/env_data", "NDVI_R01M.Rdata"))
+colnames(NDVI)[8:9] <- c("x_", "y_") # change the coordinate col names to match with the original data
+NDVI <- NDVI %>% dplyr::select(masterID, x_, y_, t_, NDVI)
+head(NDVI)
+
+# Precipitation
+precip <- read_rds(here::here("data/env_data", "PRC_R01M.Rdata"))
+colnames(precip)[8:9] <- c("x_", "y_") # change the coordinate col names to match with the original data
+precip <- precip %>% dplyr::select(masterID, x_, y_, t_, total_precipitation)
+head(precip)
+```
+
+# Data merge 
+
+merge the environmental values to the original data
+```{r data merge}
+# merge the R01M data
+R01M.df <- R01M %>% left_join(NDVI, by = c("masterID", "x_", "y_", "t_")) # NDVI 
+R01M.df <- R01M.df %>% left_join(precip, by = c("masterID", "x_", "y_", "t_")) # total precipitation 
+
+# remove all the NAs in the layers 
+R01M.df <- R01M.df %>% filter(!is.na(NDVI))
+```
+
+# NDVI calucation
+
+Create functions for Delta and Anomaly NDVI 
+```{r delta ndvi}
+# delta NDVI calculation
+
+## R01M individuals
+R01M.df <- R01M.df %>% 
+  group_by(masterID) %>% 
+  mutate(delta_NDVI = abs(NDVI - lag(NDVI, default = first(NDVI))))
+
+# remove all t
+R01M.df %>% summary()
+```
+
+
+save the finalized merged data 
+```{r data save}
+# finalized R01M 
+#write_rds(R01M.df, path = here("data/finalized_data/","R01M_final.Rdata"))
+#write_csv(R01M.df, path = here::here("data/finalized_data/R01M_final.csv"))
+```
+
+# AMT: Resample tracks and generate random steps
+
+Tracking data
+```{r read data}
+# read the tracking data: R01M
+R01M <- read_rds(here::here("data/finalized_data", "R01M_final.Rdata"))
+R01M %>% head()
+```
+
+Check the actual sampling rate 
+```{r sampling rate}
+amt::summarize_sampling_rate(R01M)
+```
+We can see summary statistics for the difference between locations in hours. There is some variation in the time between locations, and missed locations lead to some gaps in the data. We will therefore need to resample the track when we format the data for this analysis.
+
+# Format and Generate Random Steps 
+```{r random steps}
+# create a random steps 
+R01M %>% ungroup() %>% track_resample(rate = hours(1), tolerance = minutes(30)) %>% 
+  steps_by_burst() %>% 
+  random_steps() %>% 
+  filter(!is.na(ta_))
+
+ssf_R01M
+
+# save the ssf data
+#write_rds(ssf_R01M, path = here("data","trk.ssf_R01M.Rdata"))
+```
+
+# Footer
+```{r footer}
+sessionInfo()
+```

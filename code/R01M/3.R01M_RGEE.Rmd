@@ -1,0 +1,397 @@
+---
+title: "R01M_RGEE"
+author: "Dennis Kim"
+date: "2023-02-09"
+output: html_document
+---
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(here)
+library(tidyverse)
+library(lubridate)
+library(amt)
+library(sf)
+
+options(width = 150)
+
+# set knitr options 
+opts_chunk$set(fig.width = 6, fig.height = 5, comment = NA)
+```
+
+# Read Data
+```{r read data}
+# read the tracking R01M
+R01M <- read_rds(here::here("data/finalized_data", "trk.ssf_R01M.Rdata"))
+
+# select applicable columns and rename them 
+
+# use locations 
+use <- R01M %>% dplyr::filter(case_ == TRUE) %>% dplyr::select(x1_, y1_, t1_, case_) %>% rename_with(.cols = c(1:4), ~c("x_","y_","t_","case"))
+
+# random locations
+random <- R01M %>% dplyr::filter(case_ == FALSE) %>% dplyr::select(x2_, y2_, t2_, case_) %>% rename_with(.cols = c(1:4), ~c("x_","y_","t_","case"))
+```
+
+# Data manipulation (sf conversion)
+convert the data frame into an sf object. Also, set the date as a string with a 'YYYY-MM-DDTHH:MM:SS'. We will use this data to convert it into milliseconds since midnight on January 1, 1970, a format use in Google Earth Engine to manage dates.
+```{r data manipulation}
+# use locations
+use$Date <- as.POSIXct(use$t_, format = "%Y-%m-%d %H:%M:%S", tz="UTC")
+use$Date <- as.factor(use$t_)
+use$Date <- sub(" ", "T", use$t_) #Put in a format that can be read by javascript
+use <- sf::st_as_sf(use, coords=c("x_", "y_"), crs = 4326) #Transform the dataframe into sf object. Make sure the name of the columns for the coordinates match. CRS needs to be in longlat WGS84.
+use$t_ <- as.character(use$t_)
+use$case <- as.character(use$case)
+head(use)
+
+# random locations
+random$Date <- as.POSIXct(random$t_, format = "%Y-%m-%d %H:%M:%S", tz="UTC")
+random$Date <- as.factor(random$t_)
+random$Date <- sub(" ", "T", random$t_) #Put in a format that can be read by javascript
+random <- sf::st_as_sf(random, coords=c("x_", "y_"), crs = 4326) #Transform the dataframe into sf object. Make sure the name of the columns for the coordinates match. CRS needs to be in longlat WGS84.
+random$t_ <- as.character(random$t_)
+random$case <- as.character(random$case)
+head(random)
+```
+
+# Initialize rgee
+
+Before initializing "rgee" package, follow these steps for Window users 
+1) download python and know your directory 
+2) open your command prompt - follow the command lines 
+2.1) python --version
+2.2) python -m ensurepip --default-pip (make sure you have pip installed)
+2.3) python -m pip install --upgrade pip setuptools wheel (if you have an older version pip - update)
+3) download necessary packages for running google engine (make sure your pip is installed in the same directory as the python)
+3.1) python -m pip install numpy
+3.2) python -m pip install earthengine-api
+4) go back to R and run "rgee" package and use function rgee::ee_check() to see if all the parts are good.
+
+```{r rgee}
+# load and initalize rgee
+library(rgee)
+library(reticulate)
+library(googleCloudStorageR)
+library(tfruns)
+library(geojsonio)
+
+# install google cloud
+#library(cloudml)
+#cloudml::gcloud_install()
+
+# set the python working directory
+#rgee::ee_install()
+#rgee::ee_clean_pyenv()
+#rgee::ee_install_set_pyenv(py_path = "C:/Users/dongm")
+
+# load and initialize rgee
+#ee_install()
+#ee_install_upgrade()
+ee_Initialize()
+rgee::ee_check()
+```
+
+# Define Google Earth Engine functions 
+
+Create functions to match images to the data and extract pixel values. Note that you can edit the maximum temporal window allowed to find a match.
+```{r ee functions}
+#Function to add property with time in milliseconds
+add_date<-function(feature) {
+  date <- ee$Date(ee$String(feature$get("Date")))$millis()
+  feature$set(list(date_millis=date))
+}
+
+#Join Image and Points based on a maxDifference Filter within a temporal window
+
+#Set temporal window in days for filter. This will depend on the remote sensing data used.
+tempwin <- 16 #for NDVI
+
+#Set the filter
+maxDiffFilter<-ee$Filter$maxDifference(
+  difference=tempwin*24*60*60*1000, #days * hr * min * sec * milliseconds
+  leftField= "date_millis", #Timestamp of the telemetry data
+  rightField="system:time_start" #Image date
+)
+
+# Define the join. We implement the saveBest function for the join, which finds the image that best matches the filter (i.e., the image closest in time to the particular GPS fix location). 
+saveBestJoin<-ee$Join$saveBest(
+  matchKey="bestImage",
+  measureKey="timeDiff"
+)
+
+#Function to add property with raster pixel value from the matched image
+add_value<-function(feature){
+  #Get the image selected by the join
+  img1<-ee$Image(feature$get("bestImage"))$select(band)
+  #Extract geometry from the feature
+  point<-feature$geometry()
+  #Get pixel value for each point at the desired spatial resolution (argument scale)
+  pixel_value<-img1$sample(region=point, scale=250, tileScale = 16, dropNulls = F) 
+  #Return the data containing pixel value and image date.
+  feature$setMulti(list(PixelVal = pixel_value$first()$get(band), DateTimeImage = img1$get('system:index')))
+}
+
+# Function to remove image property from features
+removeProperty<- function(feature) {
+  #Get the properties of the data
+  properties = feature$propertyNames()
+  #Select all items except images
+  selectProperties = properties$filter(ee$Filter$neq("item", "bestImage"))
+  #Return selected features
+  feature$select(selectProperties)
+}
+```
+
+# Load image collection
+
+The entire list of different environmental layer datasets is available at this [link](https://developers.google.com/earth-engine/datasets/catalog)
+
+## NDVI
+
+First, try **NDVI from MODIS Terra Vegetation Indexes 16-Day Global 250m dataset - MOD13Q1.061 Terra Vegetation Indices 16-Day Global 250m**. 
+
+We will set the start and end days to filter the image collections. Temporal availability depends on each dataset. We will also create an object with the name of the band we are interested in working with. The name of the band is also specific to each image collection.
+
+```{r NDVI prep}
+start<-'2018-08-13'
+end<-'2020-02-26'
+imagecoll<-ee$ImageCollection("MODIS/061/MOD13Q1")$filterDate(start,end)
+band <- "NDVI" #Name of the band to use. You can change to EVI for instance when using MOD13Q1.
+```
+
+# Extract pixel value 
+
+A key function in this process is the ee_as_sf which converts the Google Earth Engine table in a sf object. This function provides three different options to convert the table (feature collection) into a sf object:
+
+1. getInfo: which is fast and direct but has a limit of 5000 features
+2. drive: which exports data through your Google Drive account
+3. gsc: which exports data through your Google Cloud Storage account
+
+We use here the getInfo option given it is direct and simple. However, this option has a limit of 5000 features to convert. For that reason, we are going to run a loop, processing 1000 features (points) per time to avoid errors. If memory limit errors are display, then you can reduce the number of points to extract each time by changing the each argument on the rep function.
+
+## used location NDVI
+
+```{r used extract NDVI}
+use$uniq <- rep(1:1000, each=1000)[1:nrow(use)] #This is for up to 1 million points. To increase the max number of points, increase the value for max repetitions. To change the number of points to run per time, change the value in the argument each (up to 5000).
+
+# Initialize the start time 
+start_time <- Sys.time()
+
+# create an empty dataoutput for storing NDVI values 
+use.NDVI.dataoutput <- data.frame()
+
+# for-loop
+for(x in unique(use$uniq)){
+  data1 <- use %>% filter(uniq == x)
+  # Send sf to GEE
+  data <- sf_as_ee(data1)
+  # Transform day into milliseconds
+  data<-data$map(add_date)
+  # Apply the join
+  Data_match<-saveBestJoin$apply(data, imagecoll, maxDiffFilter)
+  # Add pixel value to the data
+  DataFinal<-Data_match$map(add_value)
+  # Remove image property from the data
+  DataFinal<-DataFinal$map(removeProperty)
+  # Move GEE object into R
+  temp<- ee_as_sf(DataFinal, via = 'getInfo')
+  # Append
+  use.NDVI.dataoutput <- rbind(use.NDVI.dataoutput, temp)
+}
+
+end_time <- Sys.time()
+```
+
+The new sf data frame with the pixel values in now stored as the dataoutput object. You can use this for further analysis.
+```{r used sf output}
+# change the column name for NDVI
+names(use.NDVI.dataoutput)[3] <- band
+
+# check the overall data and convert the geometry back to lat and long and drop the geomtry  
+use.NDVI.df <- use.NDVI.dataoutput %>% mutate(lon = sf::st_coordinates(.)[,1],
+                           lat = sf::st_coordinates(.)[,2]) %>% st_drop_geometry()
+
+use.NDVI.df
+
+# save the data 
+#write_rds(use.NDVI.df, path = here("data/env_data", "SSF_NDVI_use.Rdata"))
+```
+
+## Random locations NDVI
+```{r random extract NDVI}
+random$uniq <- rep(1:1000, each=1000)[1:nrow(random)] #This is for up to 1 million points. To increase the max number of points, increase the value for max repetitions. To change the number of points to run per time, change the value in the argument each (up to 5000).
+
+# Initialize the start time 
+start_time <- Sys.time()
+
+# create an empty dataoutput for storing NDVI values 
+random.NDVI.dataoutput <- data.frame()
+
+# for-loop
+for(x in unique(random$uniq)){
+  data1 <- random %>% filter(uniq == x)
+  # Send sf to GEE
+  data <- sf_as_ee(data1)
+  # Transform day into milliseconds
+  data<-data$map(add_date)
+  # Apply the join
+  Data_match<-saveBestJoin$apply(data, imagecoll, maxDiffFilter)
+  # Add pixel value to the data
+  DataFinal<-Data_match$map(add_value)
+  # Remove image property from the data
+  DataFinal<-DataFinal$map(removeProperty)
+  # Move GEE object into R
+  temp<- ee_as_sf(DataFinal, via = 'getInfo')
+  # Append
+  random.NDVI.dataoutput <- rbind(random.NDVI.dataoutput, temp)
+}
+
+end_time <- Sys.time()
+```
+
+The new sf data frame with the pixel values in now stored as the dataoutput object. You can use this for further analysis.
+```{r random sf output}
+# change the column name for NDVI
+names(random.NDVI.dataoutput)[3] <- band
+
+# check the overall data and convert the geometry back to lat and long and drop the geomtry  
+random.NDVI.df <- random.NDVI.dataoutput %>% mutate(lon = sf::st_coordinates(.)[,1],
+                           lat = sf::st_coordinates(.)[,2]) %>% st_drop_geometry()
+
+random.NDVI.df
+
+# save the data 
+#write_rds(random.NDVI.df, path = here("data/env_data", "SSF_NDVI_random.Rdata"))
+```
+
+## Precipitation
+
+Do the same steps as above for the precipitation extraction - we will use **ERA5 Daily Aggregates - Latest Climate Reanalysis Produced by ECMWF / Copernicus Climate Change Service**
+
+```{r precip prep}
+imagecoll<-ee$ImageCollection("ECMWF/ERA5/DAILY")$filterDate(start,end)
+band <- "total_precipitation" #Name of the band to use. You can change to EVI for instance when using MOD13Q1.
+tempwin <- 1 # temporal window for precipitation
+```
+
+# Extract pixel value 
+
+A key function in this process is the ee_as_sf which converts the Google Earth Engine table in a sf object. This function provides three different options to convert the table (feature collection) into a sf object:
+
+1. getInfo: which is fast and direct but has a limit of 5000 features
+2. drive: which exports data through your Google Drive account
+3. gsc: which exports data through your Google Cloud Storage account
+
+We use here the getInfo option given it is direct and simple. However, this option has a limit of 5000 features to convert. For that reason, we are going to run a loop, processing 1000 features (points) per time to avoid errors. If memory limit errors are display, then you can reduce the number of points to extract each time by changing the each argument on the rep function.
+
+## Used precipitation
+
+```{r used extract PRC}
+use$uniq <- rep(1:1000, each=1000)[1:nrow(use)] #This is for up to 1 million points. To increase the max number of points, increase the value for max repetitions. To change the number of points to run per time, change the value in the argument each (up to 5000).
+
+# Initialize the start time 
+start_time <- Sys.time()
+
+# create an empty dataoutput for storing NDVI values 
+use.PRC.dataoutput <- data.frame()
+
+# for-loop
+for(x in unique(use$uniq)){
+  data1 <- use %>% filter(uniq == x)
+  # Send sf to GEE
+  data <- sf_as_ee(data1)
+  # Transform day into milliseconds
+  data<-data$map(add_date)
+  # Apply the join
+  Data_match<-saveBestJoin$apply(data, imagecoll, maxDiffFilter)
+  # Add pixel value to the data
+  DataFinal<-Data_match$map(add_value)
+  # Remove image property from the data
+  DataFinal<-DataFinal$map(removeProperty)
+  # Move GEE object into R
+  temp <- ee_as_sf(DataFinal, via = 'getInfo')
+  # Append
+  use.PRC.dataoutput <- rbind(use.PRC.dataoutput, temp)
+}
+
+end_time <- Sys.time()
+```
+
+The new sf data frame with the pixel values in now stored as the dataoutput object. You can use this for further analysis.
+```{r used sf output}
+# change the column name for NDVI
+names(use.PRC.dataoutput)[3] <- band
+
+# check the overall data and convert the geometry back to lat and long and drop the geomtry  
+use.PRC.df <- use.PRC.dataoutput %>% mutate(lon = sf::st_coordinates(.)[,1],
+                           lat = sf::st_coordinates(.)[,2]) %>% st_drop_geometry()
+
+use.PRC.df
+
+# save the data 
+#write_rds(use.PRC.df, path = here("data/env_data", "SSF_PRC_use.Rdata"))
+```
+
+## random precipitation
+```{r random extract PRC}
+random$uniq <- rep(1:1000, each=1000)[1:nrow(random)] #This is for up to 1 million points. To increase the max number of points, increase the value for max repetitions. To change the number of points to run per time, change the value in the argument each (up to 5000).
+
+# Initialize the start time 
+start_time <- Sys.time()
+
+# create an empty dataoutput for storing NDVI values 
+random.PRC.dataoutput <- data.frame()
+
+# for-loop
+for(x in unique(random$uniq)){
+  data1 <- random %>% filter(uniq == x)
+  # Send sf to GEE
+  data <- sf_as_ee(data1)
+  # Transform day into milliseconds
+  data<-data$map(add_date)
+  # Apply the join
+  Data_match<-saveBestJoin$apply(data, imagecoll, maxDiffFilter)
+  # Add pixel value to the data
+  DataFinal<-Data_match$map(add_value)
+  # Remove image property from the data
+  DataFinal<-DataFinal$map(removeProperty)
+  # Move GEE object into R
+  temp <- ee_as_sf(DataFinal, via = 'getInfo')
+  # Append
+  random.PRC.dataoutput <- rbind(random.PRC.dataoutput, temp)
+}
+
+end_time <- Sys.time()
+```
+
+The new sf data frame with the pixel values in now stored as the dataoutput object. You can use this for further analysis.
+```{r random sf output}
+# change the column name for NDVI
+names(random.PRC.dataoutput)[3] <- band
+
+# check the overall data and convert the geometry back to lat and long and drop the geomtry  
+random.PRC.df <- random.PRC.dataoutput %>% mutate(lon = sf::st_coordinates(.)[,1],
+                           lat = sf::st_coordinates(.)[,2]) %>% st_drop_geometry()
+
+random.PRC.df
+
+# save the data 
+#write_rds(random.PRC.df, path = here("data/env_data", "SSF_PRC_random.Rdata"))
+```
+
+# Visualize locations
+```{r visualization}
+Pres <- NDVI.dataoutput
+
+library(tmap)
+tmap_mode('view')
+tm_shape(Pres) + tm_dots(col = 'blue', title = "Presence")
+```
+
+# Footer
+```{r footer}
+sessionInfo()
+```
