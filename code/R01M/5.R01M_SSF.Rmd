@@ -1,0 +1,134 @@
+---
+title: "R01M_SSF"
+author: "Dennis Kim"
+date: "2023-02-13"
+output: html_document
+---
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(here)
+library(tidyverse)
+library(lubridate)
+library(amt)
+library(ggplot2)
+
+options(width = 150)
+
+# set knitr options 
+opts_chunk$set(fig.width = 6, fig.height = 5, comment = NA)
+```
+
+# Read amt trk Data
+
+Tracking amt trk data
+```{r trk data}
+# read the tracking data: R01M
+trk.R01M <- read_rds(here::here("data/finalized_data", "finalized_SSF_R01M.Rdata"))
+trk.R01M <- trk.R01M %>% arrange(step_id_)
+trk.R01M %>% head()
+
+# create category variables for the average body condition values 
+# consider converting the continuous 1-9 values into three categories of “under optimal BC” (1-3), “optimal BC” (4-6), and “over optimal BC” (7-9).
+trk.R01M <- trk.R01M %>% mutate(c_avg_BC = ifelse(avg.bc < 4, "under", ifelse(avg.bc < 7, "optimal", "over")) %>% as.factor(.))
+trk.R01M$c_avg_BC <- fct_relevel(trk.R01M$c_avg_BC, "under") # relevel the reference base category
+trk.R01M %>% head()
+```
+
+Extract the temperature and season information
+```{r temp_c}
+# read the tracking data: R01M
+R01M <- read_rds(here::here("data", "comp.R01M.Rdata"))
+# only select the columns that matter for merging (temp, season)
+R01M <- R01M %>% select(x_, y_, t_, temp_c, season_level) %>% rename(x1_ = 1, y1_ = 2, t1_ = 3)
+R01M %>% head() # check the data
+
+# merge to the original data with temp and season info
+trk.R01M <- trk.R01M %>% left_join(R01M, by = c("x1_", "y1_", "t1_"))
+trk.R01M
+```
+
+
+# Explore the data
+```{r visualize}
+ggplot()+
+  geom_point(data = trk.R01M %>% na.omit(.), aes(x=x1_, y=y1_, col=NDVI), size = 1)+
+  theme_bw()
+
+# body condition values for used and available data
+ggplot(trk.R01M, aes(x = avg.bc, y = ..prop.., group = case_, colour = case_))+
+  geom_bar(position = "dodge", aes(fill = case_))
+
+ggplot(trk.R01M, aes(x = c_avg_BC, y = ..prop.., group = case_, colour = case_))+
+  geom_bar(position = "dodge", aes(fill = case_))
+```
+
+# SSF model fitting 
+
+model 1
+```{r ssf model fit1}
+# combined model with continuous variable of Body Condition
+m1 <- amt::fit_issf(case_ ~NDVI+
+                          total_precipitation+
+                          NDVI:avg.bc+
+                          total_precipitation:avg.bc+
+                          NDVI:speed+
+                          total_precipitation:speed+
+                          NDVI:temp_c+
+                          total_precipitation:temp_c+
+                          log(sl_)+
+                          cos(ta_)+
+                          avg.bc:log(sl_)+
+                          avg.bc:cos(ta_)+
+                          strata(step_id_), data = trk.R01M)
+
+# summary of the model 1
+summary(m1)
+
+# confidence intervals of the model 1 
+confint(m1$model)
+```
+
+**Interpretation**
+
+- **NDVI**: *nagative* the animal would less likely to be a greater NDVI place 
+
+- **NDVI:avg.bc**: *positive* as average body condition increases, the animal would likely to be in a higher NDVI place.
+
+- **total_precipitation:speed**: *positive* as speed of an individual increases, the animal would likely to be in a higher total precipitation place
+
+- **total_precipitation:temp_c**: *negative* as temp increases, the animal would likely to avoid a higher total precipitation place 
+
+- **log(sl_):avg.bc**: *positive* as avg body condition increases, the animal would likely to be in a longer step length
+
+
+model 2
+```{r ssf model fit2}
+# combined model with categorical body condition
+m2 <- amt::fit_issf(case_ ~NDVI+ total_precipitation+ NDVI:c_avg_BC+ total_precipitation:c_avg_BC+ NDVI:speed+ total_precipitation:speed+ log(sl_)+ cos(ta_)+ c_avg_BC:log(sl_)+ c_avg_BC:cos(ta_)+ strata(step_id_), data = trk.R01M)
+
+# summary of the model 2
+summary(m2)
+
+# confidence intervals of the model 2
+confint(m1$model)
+```
+
+**Interpretation**
+
+- **total_precipitation**: *nagative* the animal would less likely to be in a greater total precipitation locations
+
+- **NDVI:c_avg_BCover**: *positive* the animal would be likely to use the higher NDVI locations when it is greater optimal body condition than the lower body condition.
+
+- **total_precipitation:speed**: *positive* as speed of an individual increases, the animal would likely to be in a higher total precipitation places
+
+- **log(sl_):c_avg_BCoptimal**: *positive* 
+
+- **log(sl_):c_avg_BCover**: *positive*
+
+# Footer
+```{r footer}
+sessionInfo()
+```
