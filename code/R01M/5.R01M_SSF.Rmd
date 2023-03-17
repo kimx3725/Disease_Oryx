@@ -14,7 +14,10 @@ library(tidyverse)
 library(lubridate)
 library(amt)
 library(ggplot2)
-
+library(broom)
+library(jtools)
+library(huxtable)
+library(cowplot)
 options(width = 150)
 
 # set knitr options 
@@ -33,11 +36,11 @@ trk.R01M %>% head()
 # create category variables for the average body condition values 
 # consider converting the continuous 1-9 values into three categories of “under optimal BC” (1-3), “optimal BC” (4-6), and “over optimal BC” (7-9).
 trk.R01M <- trk.R01M %>% mutate(c_avg_BC = ifelse(avg.bc < 4, "under", ifelse(avg.bc < 7, "optimal", "over")) %>% as.factor(.))
-trk.R01M$c_avg_BC <- fct_relevel(trk.R01M$c_avg_BC, "under") # relevel the reference base category
+trk.R01M$c_avg_BC <- fct_relevel(trk.R01M$c_avg_BC, "optimal") # relevel the reference base category
 trk.R01M %>% head()
 ```
 
-Extract the temperature and season information
+Add the temperature and season information
 ```{r temp_c}
 # read the tracking data: R01M
 R01M <- read_rds(here::here("data", "comp.R01M.Rdata"))
@@ -50,9 +53,9 @@ trk.R01M <- trk.R01M %>% left_join(R01M, by = c("x1_", "y1_", "t1_"))
 trk.R01M
 ```
 
-
 # Explore the data
 ```{r visualize}
+# tracks with NDVI values 
 ggplot()+
   geom_point(data = trk.R01M %>% na.omit(.), aes(x=x1_, y=y1_, col=NDVI), size = 1)+
   theme_bw()
@@ -61,13 +64,14 @@ ggplot()+
 ggplot(trk.R01M, aes(x = avg.bc, y = ..prop.., group = case_, colour = case_))+
   geom_bar(position = "dodge", aes(fill = case_))
 
+# factorized body condition data 
 ggplot(trk.R01M, aes(x = c_avg_BC, y = ..prop.., group = case_, colour = case_))+
   geom_bar(position = "dodge", aes(fill = case_))
 ```
 
-# SSF model fitting 
+# SSF model fitting - whole season 
 
-model 1
+model 1 - continuous average body condition 
 ```{r ssf model fit1}
 # combined model with continuous variable of Body Condition
 m1 <- amt::fit_issf(case_ ~NDVI+
@@ -104,7 +108,7 @@ confint(m1$model)
 - **log(sl_):avg.bc**: *positive* as avg body condition increases, the animal would likely to be in a longer step length
 
 
-model 2
+model 2 - categorical average body condition
 ```{r ssf model fit2}
 # combined model with categorical body condition
 m2 <- amt::fit_issf(case_ ~NDVI+ total_precipitation+ NDVI:c_avg_BC+ total_precipitation:c_avg_BC+ NDVI:speed+ total_precipitation:speed+ log(sl_)+ cos(ta_)+ c_avg_BC:log(sl_)+ c_avg_BC:cos(ta_)+ strata(step_id_), data = trk.R01M)
@@ -118,15 +122,163 @@ confint(m1$model)
 
 **Interpretation**
 
-- **total_precipitation**: *nagative* the animal would less likely to be in a greater total precipitation locations
-
 - **NDVI:c_avg_BCover**: *positive* the animal would be likely to use the higher NDVI locations when it is greater optimal body condition than the lower body condition.
 
 - **total_precipitation:speed**: *positive* as speed of an individual increases, the animal would likely to be in a higher total precipitation places
 
-- **log(sl_):c_avg_BCoptimal**: *positive* 
+- **log(sl_):c_avg_BUnder**: *negative* 
 
 - **log(sl_):c_avg_BCover**: *positive*
+
+
+# SSF model fitting - seasonal variability (susceptible vs infected phases)
+
+Identify the cutoff period to separate the seasons of animals when they were infected vs susceptible -- visualize the density of body condition trends over time - 200 julian days would be a good threshold period.
+```{r season ssf}
+# facet the groups and see the time ranges of different body condition distribution
+ggplot(trk.R01M, aes(x = julian, color = c_avg_BC, fill = c_avg_BC))+
+  geom_density()+
+  facet_wrap(~c_avg_BC, scales = "free")
+
+# set the cutoff season date as 200 days would be good
+ggplot(trk.R01M, aes(x = julian, color = c_avg_BC, fill = c_avg_BC))+
+  geom_density()+
+  geom_vline(xintercept = 200, color = "purple", size = 1.2)
+```
+
+model 3 - pre-infection period model fit 
+```{r pre infection}
+# combined model with continuous variable of Body Condition
+m3 <- amt::fit_issf(case_ ~NDVI+
+                          total_precipitation+
+                          NDVI:speed+
+                          total_precipitation:speed+
+                          NDVI:temp_c+
+                          total_precipitation:temp_c+
+                          log(sl_)+
+                          cos(ta_)+
+                          strata(step_id_), data = trk.R01M %>% filter(julian < 221))
+
+# summary of the model 1
+summary(m3)
+
+# confidence intervals of the model 1 
+confint(m3$model)
+```
+
+**interpretation** 
+
+- During the pre-infection period, the animal is **more** likely to take a longer step length 
+
+model 4 - post-infection period model fit 
+```{r post infection}
+# combined model with continuous variable of Body Condition
+m4 <- amt::fit_issf(case_ ~NDVI+
+                          total_precipitation+
+                          NDVI:speed+
+                          total_precipitation:speed+
+                          NDVI:temp_c+
+                          total_precipitation:temp_c+
+                          log(sl_)+
+                          cos(ta_)+
+                          strata(step_id_), data = trk.R01M %>% filter(julian > 219))
+
+# summary of the model 1
+summary(m4)
+
+# confidence intervals of the model 1 
+confint(m4$model)
+```
+
+**interpretation** 
+
+- During the post-infection period, the animal is **less** likely to take a longer step length 
+
+# Visualization 
+
+first, create data that only contain the coefficients and confidence intervals 
+```{r coefficients}
+# get the coefficient values 
+m2.coef <- m2$model %>% tidy() %>% select(term, estimate, p.value) %>% 'colnames<-'(c("beta", "coefficient","p")) #m2
+m3.coef <- m3$model %>% tidy() %>% select(term, estimate, p.value) %>% 'colnames<-'(c("beta", "coefficient","p")) #m3
+m4.coef <- m4$model %>% tidy() %>% select(term, estimate, p.value) %>% 'colnames<-'(c("beta", "coefficient","p")) #m4
+
+# get the confidence intervals
+m2.ci <- m2$model %>% confint() %>% data.frame() %>% 'colnames<-'(c("CI2.5", "CI97.5")) %>% mutate(beta = m2.coef$beta)
+m3.ci <- m3$model %>% confint() %>% data.frame() %>% 'colnames<-'(c("CI2.5", "CI97.5")) %>% mutate(beta = m3.coef$beta)
+m4.ci <- m4$model %>% confint() %>% data.frame() %>% 'colnames<-'(c("CI2.5", "CI97.5")) %>% mutate(beta = m4.coef$beta)
+
+# merge each data with the coef and CIs 
+m2.fit <- left_join(m2.coef, m2.ci)
+m3.fit <- left_join(m3.coef, m3.ci)
+m4.fit <- left_join(m4.coef, m4.ci)
+
+m2.fit
+m3.fit
+m4.fit
+```
+
+Create coefficient plots for the last 3 models
+
+- m2: the whole season  
+- m3: susceptible season
+- m4: infected season 
+
+comparing model coefficients visually 
+```{r whole coefficients}
+# whole plot visualization
+plot_summs(m2$model, m3$model, m4$model,
+           model.names = c("Whole season", "susceptible season", "infected season"))
+# table
+export_summs(m2$model, m3$model, m4$model, scale = TRUE)
+
+data.frame(summary(m2)$coef[summary(m2)$coef[,4] <= .05, 4]) %>% 'colnames<-'(c("coefficient"))
+```
+
+Since some of the coefficient values are really large and not significant -- let's see the significant terms only and step lengths
+```{r plot}
+# m2 
+m2.plot <- ggplot(m2.fit %>% filter(p <= .05) %>% filter(beta == c("log(sl_):c_avg_BCunder", "log(sl_):c_avg_BCover")), aes(coefficient, beta, color = factor(beta)))+
+  geom_vline(xintercept = 0, lty=2, lwd=1, colour="grey50")+
+  geom_point(size=4, pch=20, position=position_dodge(width=0.5))+
+  theme_bw()+
+  xlab("Effect size")+
+  theme(legend.position = "none", axis.title.y = element_blank())+
+  ggtitle("Whole season")
+
+# m3
+m3.plot <- ggplot(m3.fit %>% filter(p <= .05), aes(coefficient, beta, color = factor(beta)))+
+  geom_vline(xintercept = 0, lty=2, lwd=1, colour="grey50")+
+  geom_point(size=4, pch=20, position=position_dodge(width=0.5))+
+  theme_bw()+
+  xlab("Effect size")+
+  theme(legend.position = "none", axis.title.y = element_blank())+
+  ggtitle("Susceptible season")
+
+# m4
+m4.plot <- ggplot(m4.fit %>% filter(p <= .05) %>% filter(beta == "log(sl_)"), aes(coefficient, beta, color = factor(beta)))+
+  geom_vline(xintercept = 0, lty=2, lwd=1, colour="grey50")+
+  geom_point(size=4, pch=20, position=position_dodge(width=0.5))+
+  theme_bw()+
+  xlab("Effect size")+
+  theme(legend.position = "none", axis.title.y = element_blank())+
+  ggtitle("Infected season")
+
+m2.plot
+m3.plot
+m4.plot
+```
+
+combine the plots 
+```{r combine the plots}
+# combine the figures 
+grid <- plot_grid(m2.plot, m3.plot, m4.plot,
+                  nrow = 3,
+                  align = 'h',
+                  rel_widths = c(2,1.5,1.5))
+grid
+```
+
 
 # Footer
 ```{r footer}
