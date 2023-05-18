@@ -10,7 +10,7 @@ output: html_document
 To manipulate the merged tracking data with the other addtional columns for SSFs. To do this, I will: 
 
 1. Determine infected individuals and healthy individuals    
-2. Inspect movement characteristics of individuals 
+3=2. Inspect movement characteristics of individuals 
 
 # Document Preamble 
 ```{r preamble, message=FALSE, warning=FALSE}
@@ -27,6 +27,8 @@ library(purrr)
 library(lubridate)
 library(amt)
 library(ggplot2)
+library(raster)
+library(sf)
 options(width = 150)
 
 # set knitr options 
@@ -40,251 +42,382 @@ Read in the gps data and
 # Location data of the oryx with additional disease columns 
 oryx <- read.csv(here::here("data", "oryx_gps_id.csv"))
 
+# NAs in fate column convert to unkown
+oryx$fate[is.na(oryx$fate)] <- "unknown"
+
 # summary of the location data 
 summary(oryx)
 ```
 
-## Healthy individuals
+# Multiple Individuals 
 
-Identify healthy individuals   
-```{r healthy data}
-# NAs in fate column convert to unkown
-oryx$fate[is.na(oryx$fate)] <- "unknown"
+Referenced by Katherine Mertes -- select healthy and infected individuals within the same release group (R4)
 
-# filter out the alive individuals = 153 individuals
-alive.oryx <- oryx %>% filter(fate == "alive")
-alive.oryx %>% summary()
+```{r indicators}
+# check the disease individuals -- that are dead - filter individuals that have at least 1000 location points
+disease_id <- oryx %>% filter(Rgroup == 4) %>% filter(cause_of_death %in% c("disease", "presumed disease")) %>% nest_by(masterID) %>% mutate(rows = nrow(data)) %>% dplyr::select(-data) %>% filter(rows > 1000) 
 
-# time range dataframe
-t.alive.oryx <- alive.oryx %>% dplyr::select(collar_ID, date) %>% 
-  nest_by(collar_ID) %>% 
-  mutate(min_date = map(data, min),
-         max_date = map(data, max)) %>% unnest(min_date, max_date) %>%                                                                         mutate(range_time = difftime(max_date, min_date)) %>% 
-  dplyr::select(collar_ID, min_date, max_date, range_time)
+disease_id
 
-# Filter the data by only selecting individuals that have more than 2000 days of worth locations
-t.alive.oryx
-t.alive.oryx %>% filter(range_time > 2000)
+# same for the susceptible individuals 
+susceptible_id <- oryx %>% filter(Rgroup == 4) %>% filter(cause_of_death %in% "alive") %>% nest_by(masterID) %>% mutate(rows = nrow(data)) %>% dplyr::select(-data) %>% filter(rows > 10000)
 
-# 5 individuals total
-long.alive.oryx <- alive.oryx %>% filter(., collar_ID %in% c("21808.2", "21819.2", "21826.2", "32138.2", "38241.1"))
-long.alive.oryx <- long.alive.oryx[,1:18]
+susceptible_id
+
+# check if the body condition data are available
+## read the body condition data 
+body_condition <- read.csv(here::here("data", "oryx_individual_field_data_122322.csv"))
+
+# only select the columns that are applicable to the data 
+body_condition <- body_condition %>% dplyr::select(datetime, animalID, lat, long, body_condition)
+
+# filter the data with non-NAs for body condition values 
+body_condition <- body_condition[complete.cases(body_condition[, 5]),]
+
+# check the available body condition individuals based on Rgroup 
+body_condition_id <- body_condition %>% nest_by(animalID) %>% mutate(rows = nrow(data)) %>% dplyr::select(-data) %>% 
+  mutate(group = case_when(
+    animalID %in% disease_id$masterID ~ "Infected",
+    animalID %in% susceptible_id$masterID ~ "Susceptible"
+  )) %>% 
+  na.omit()
+
+body_condition_id
+
+# save the body_condition id 
+#readr::write_rds(body_condition_id, path = here("data/finalized_data", "bc_id.Rdata"))
+```
+
+
+```{r select individuals}
+# select R4 group that has the body condition data (30 individuals)
+multiple_oryx <-
+  oryx %>% filter(
+    masterID %in% body_condition_id$animalID
+  )
+
+multiple_oryx
+
+# remove the original data to reduce the memory capacity 
+rm(oryx)
+rm(disease_id)
+rm(susceptible_id)
+rm(body_condition_id)
 
 # change the time format of the data 
-long.alive.oryx$date <- as.POSIXct(long.alive.oryx$date, format = "%Y-%m-%d %H:%M:%S")
-long.alive.oryx$date_released <- long.alive.oryx$date_released %>% mdy()
-long.alive.oryx$date_collared <- long.alive.oryx$date_collared %>% mdy()
-long.alive.oryx <- long.alive.oryx %>% dplyr::filter(!is.na(date))
-long.alive.oryx <- long.alive.oryx %>% drop_na() # drop the nas
+multiple_oryx$date <- multiple_oryx$date <- as.POSIXct(multiple_oryx$date, format = "%Y-%m-%d %H:%M:%S")
+multiple_oryx$date_collared <- multiple_oryx$date_collared %>% mdy()
+multiple_oryx$date_released <- multiple_oryx$date_released %>% mdy()
 
-long.alive.oryx %>% summary()
+# get rid of any missing location values in long, lat, and timestamp 
+filter_ids <- multiple_oryx %>% dplyr::select("long", "lat", "date") %>% complete.cases
+multiple_oryx <- multiple_oryx %>% filter(., filter_ids == TRUE)
 
-# save the data
-#write_rds(long.alive.oryx, path = here("data","long.healthy.Rdata"))
+multiple_oryx %>% distinct(cause_of_death)
+
+# create id group columns 
+multiple_oryx <- multiple_oryx %>% mutate(Igroup = ifelse(
+  cause_of_death %in% "alive",
+  "susceptible",
+  "infected"
+))
+
+multiple_oryx
 ```
 
-Plot the data 
-```{r alive plots}
-# facet id plots
-ggplot(long.alive.oryx, aes(x = long,
-                         y = lat))+ geom_point()+
-  facet_wrap(~collar_ID, scales = "free")+
-  ggtitle("Locations of alive individuals")
+Add shrubs and trees layers 
+```{r shrub and trees}
+# call the files as a vector of raster files 
+#imgs <- list.files("E:/disease_oryx/data/env_data/shrub", "tif$", full.names = TRUE)
+
+# use lapply to create raster objects wrapped in terra::src to create a SpatRasterCollection
+#ic <- sprc(lapply(imgs, rast))
+
+# pass the image collection to the mosaic function
+#shrub_raster <- terra::mosaic(ic)
+#shrub_raster <- raster(shrub_raster) # convert the SpatRasterlayer class to RasterLayer
+
+# save the shrub ratster 
+#writeRaster(shrub_raster, filename = "E:/disease_oryx/data/env_data/shrub/final.shrub.tif", format = "GTiff")
+
+# read the saved merged final raster layer 
+shrub_raster <- raster("E:/disease_oryx/data/env_data/shrub/final.shrub.tif")
+crs(shrub_raster)
+
+# reproject 
+shrub_raster1 <- projectRaster(shrub_raster, crs = "+proj=longlat +datum=WGS84")
+shrub_raster1
+
+#writeRaster(shrub_raster1, filename = "E:/disease_oryx/data/env_data/shrub/final.shrub1.tif", format = "GTiff")
+
+# plot the shrub raster
+plot(shrub_raster1)
+
+# extract the shrub layers 
+#multiple_oryx <- cbind(extract(shrub_raster, multiple_oryx[,c("utm_e", "utm_n")], df = T), multiple_oryx) %>% dplyr::select(-ID)
+
+#multiple_oryx
 ```
 
-## Disease-induced individuals
-
-Filter data that has disease info 
-```{r disease data}
-# inspect the IDs that are dead due to the disease (4 ids)
-oryx %>% dplyr::select(collar_ID, cause_of_death) %>% distinct() %>% dplyr::filter(!is.na(cause_of_death)) %>% dplyr::filter(cause_of_death == "disease")
-
-# select individuals with disease 
-oryx.disease <- oryx %>% dplyr::filter(cause_of_death == "disease")
-
-# check the time range of each individuals died by disease
-oryx.disease %>% group_by(collar_ID, date_released, est_DOD) %>% nest(.)
-
-# change the time format of the data 
-oryx.disease$date <- as.POSIXct(oryx.disease$date, format = "%Y-%m-%d %H:%M:%S")
-oryx.disease$date_released <- oryx.disease$date_released %>% mdy()
-oryx.disease$date_collared <- oryx.disease$date_collared %>% mdy()
-oryx.disease <- oryx.disease %>% dplyr::filter(!is.na(date))
-oryx.disease <- oryx.disease %>% drop_na() # drop the nas
-
-oryx.disease %>% summary()
-
-# save the data
-#write_rds(oryx.disease, path = here("data","disease.Rdata"))
-```
-There are total 4 individuals that are confirmed to be dead by disease: 21819.1, 21839.1, 22112.1,and 29927.0
-
-Plot the data 
-```{r disease plots}
-# facet id plots
-ggplot(oryx.disease, aes(x = long,
-                         y = lat))+ geom_point()+
-  facet_wrap(~collar_ID, scales = "free")+
-  ggtitle("Locations of disease individuals")
-```
-
-# Amt conversion 
+# Create tracks in amt
 
 Add a track class to the data and summarize the data 
 ```{r amt conversion}
 # make tracks 
-trk.alive <- amt::make_track(long.alive.oryx, .x=long, .y=lat, .t=date, masterID = masterID, collar_id= collar_ID, sex= sex, fate = fate, date_collared = date_collared, date_released = date_released, temp_c = temp_c, prev_collar_ID = prev_collar_ID, date_released = date_released, cause_of_death = cause_of_death) # healthy 
+trk <-
+  amt::make_track(
+    multiple_oryx,
+    .x = long,
+    .y = lat,
+    .t = date,
+    masterID = masterID,
+    collar_id = collar_ID,
+    sex = sex,
+    fate = fate,
+    date_collared = date_collared,
+    date_released = date_released,
+    temp_c = temp_c,
+    prev_collar_ID = prev_collar_ID,
+    date_released = date_released,
+    cause_of_death = cause_of_death,
+    Igroup = Igroup,
+    crs = CRS("+init=epsg:32634")
+  ) 
 
-trk.disease <- amt::make_track(oryx.disease, .x=long, .y=lat, .t=date, masterID = masterID, collar_id= collar_ID, sex= sex, fate = fate, date_collared = date_collared, date_released = date_released, temp_c = temp_c, prev_collar_ID = prev_collar_ID, date_released = date_released, cause_of_death = cause_of_death) # disease
+trk
+
+# save the tracking data 
+#write_rds(trk, path = here("data","multiple_original_trk.Rdata"))
 
 # calculate day/night from the movement track 
-
-## healthy
-trk.alive$hour <- hour(trk.alive$t_) # calculate the hour
-trk.alive$tod <- ifelse(trk.alive$hour < 7 | 19 < trk.alive$hour, "night", "day") # day/night
-trk.alive %>% summary()
-
-## disease
-trk.disease$hour <- hour(trk.disease$t_) # calculate the hour
-trk.disease$tod <- ifelse(trk.disease$hour < 7 | 19 < trk.disease$hour, "night", "day") # day/night
-trk.disease %>% summary()
+trk$hour <- hour(trk$t_) # calculate the hour
+trk$tod <- ifelse(trk$hour < 7 | 19 < trk$hour, "night", "day") # day/night
+trk %>% summary()
 ```
 
-# Movement characteristics 
+# Movement characteristics
 
 Calculate step lengths and net squared displacements for each individual, then rbind the data back together. 
 ```{r movement characteristics}
-# healthy
-
 # nest data by id and add columns to each nested column of data (sl and nsd)
-trk1.alive <- trk.alive %>% nest_by(collar_id) %>% 
-  mutate(sl_ = list(step_lengths(data)),
-         nsd_ = list(nsd(data))) %>% unnest() %>% ungroup()
+trk1 <- trk %>% nest_by(masterID) %>%
+  mutate(sl_ = map(list(data), step_lengths),
+         nsd = map(list(data), nsd)) %>%
+  unnest()
 
 # calculate year, month, week of each observation and append these to the dataset 
-trk1.alive <- trk1.alive %>% mutate(
+trk1 <- trk1 %>% mutate(
   year = year(t_),
-  month = month(t_, label = TRUE),
-  week = week(t_)
+  month = month(t_),
+  week = week(t_),
+  day_of_year = yday(t_)
 )
-
-trk1.alive <- trk1.alive %>% ungroup()
-
-# disease
-
-# nest data by id and add columns to each nested column of data (sl and nsd)
-trk1.disease <- trk.disease %>% nest_by(collar_id) %>% 
-  mutate(sl_ = list(step_lengths(data)),
-         nsd_ = list(nsd(data))) %>% unnest()
-
-# calculate year, month, week of each observation and append these to the dataset 
-trk1.disease <- trk1.disease %>% mutate(
-  year = year(t_),
-  month = month(t_, label = TRUE),
-  week = week(t_)
-)
-
-trk1.disease <- trk1.disease %>% ungroup()
 ```
 
 ## Net-squared displacement over time for each individual 
 ```{r nsd visualization}
-## alive
-alive.nsd.vis <- ggplot(trk1.alive, aes(x = t_, y = nsd_))+ geom_path()+
-  facet_wrap(~collar_id, scales = "free")+
+nsd.vis <- ggplot(trk1, aes(x = t_, y = nsd))+ geom_path()+
+  facet_wrap(~masterID, scales = "free")+
   ylab("NSD")+
   xlab("Time")+
-  ggtitle("Healthy: NSD over time")
+  ggtitle("Net-squared displacement over time for each individual")
 
-alive.nsd.vis
-
-## disease 
-disease.nsd.vis <- ggplot(trk1.disease, aes(x = t_, y = nsd_))+ geom_path()+
-  facet_wrap(~collar_id, scales = "free")+
-  ylab("NSD")+
-  xlab("Time")+
-  ggtitle("Disease: NSD over time")
-
-disease.nsd.vis
+nsd.vis
 
 # save the plot 
-#ggsave("alive_nsd.png", alive.nsd.vis, width = 14, height = 11)
-#ggsave("disease_nsd.png", disease.nsd.vis, width = 14, height = 11)
+#ggsave("nsd.png", nsd.vis, width = 14, height = 11)
 ```
 
 ## Step length distribution by day/night 
 ```{r sl visualization, message=FALSE, warning=FALSE}
 # alive
-alive.sl.dnight <- ggplot(trk1.alive, aes(x= tod, y= log(sl_)))+
+sl.dnight <- ggplot(trk1, aes(x= tod, y= log(sl_)))+
   geom_boxplot()+ geom_smooth()+
-  facet_wrap(~collar_id)+
+  facet_wrap(~masterID)+
   ylab("Log(SL)")+
   xlab("Time of day")+
-  ggtitle("Healthy: Step Legnths over time of the day")
+  ggtitle("Step Legnths over time of the day")
 
-alive.sl.dnight
-
-# disease 
-disease.sl.dnight <- ggplot(trk1.disease, aes(x= tod, y= log(sl_)))+
-  geom_boxplot()+ geom_smooth()+
-  facet_wrap(~collar_id)+
-  ylab("Log(SL)")+
-  xlab("Time of day")+
-  ggtitle("Disease: Step Legnths over time of the day")
-
-disease.sl.dnight
+sl.dnight
 
 # save the plot 
-#ggsave("alive_sl_dnight.png", alive.sl.dnight, width = 14, height = 11)
-#ggsave("disease_sl_dnight.png", disease.sl.dnight, width = 14, height = 11)
+#ggsave("sl_dnight.png", sl.dnight, width = 14, height = 11)
 ```
 
-## Space us (KDE) by week 
+# Resample the tracking data and generate the random points 
+```{r sampling rate}
+# check the sampling rate of individuals - 1 hour 
+trk %>% amt::summarize_sampling_rate_many(c("masterID"))
 
-calculate KDE 
-```{r KDE calculation, message=FALSE, warning=FALSE}
-# calculate the kde areas per week
-disease.kde.week <- trk.disease %>% mutate(week = week(t_)) %>% nest_by(collar_id, week) %>% 
-  transmute(kdearea = list(hr_kde(data, levels = 0.95) %>% hr_area)) %>% 
-  unnest()
+# regularize the steps and generate random steps 
+ssfdat <- trk %>% nest_by(masterID) %>% mutate(
+  resample = map(
+    list(data),
+    ~ .x %>% track_resample(rate = hours(1), tolerance = minutes(30)) %>%
+      filter_min_n_burst() %>%
+      steps_by_burst() %>%
+      random_steps() %>% 
+      extract_covariates(shrub_raster1)
+  )
+) %>% dplyr::select(-data) %>% unnest() %>% ungroup()
 
-alive.kde.week <- trk.alive %>% mutate(week = week(t_)) %>% nest_by(collar_id, week) %>% 
-  transmute(kdearea = list(hr_kde(data, levels = 0.95) %>% hr_area)) %>% 
-  unnest()
+ssfdat
+```
 
-# kde overweek visualization 
-alive.kde.vis <- ggplot(alive.kde.week, aes(x = week, y = area))+
-  geom_point()+
-  geom_smooth()+
-  facet_wrap(~collar_id, scales = "free")+
-  xlab("Week")+
-  ylab("KDE area")+
-  ggtitle("Healthy: Kernel Density Estimation (KDE) over time (weeks)")
+# seasons 
+```{r seasons}
+# create an indicator column that label the different seasonal ranges
+ssfdat1 <- ssfdat %>%
+  mutate(
+    week = week(t1_),
+    day_of_year = yday(t1_),
+    season_level = case_when(
+      dplyr::between(day_of_year, 72, 191) ~ 'hotdry',
+      dplyr::between(day_of_year, 192, 274) ~
+        'rainy'
+    )
+  ) %>%
+  mutate(season_level = replace_na(season_level, "cooldry")) %>%
+  ungroup()
 
-alive.kde.vis
+ssfdat1
+```
 
-disease.kde.vis <- ggplot(disease.kde.week, aes(x = week, y = area))+
-  geom_point()+
-  geom_smooth()+
-  facet_wrap(~collar_id, scales = "free")+
-  xlab("Week")+
-  ylab("KDE area")+
-  ggtitle("Disease: Kernel Density Estimation (KDE) over time (weeks)")
+# body condition 
 
-disease.kde.vis
+filter the body condition data for the selected individuals and join the data 
+```{r R01M Bc}
+# change the column name of the body condition same as the original tracking data 
+colnames(body_condition) <- c("t1_", "masterID", "y1_", "x1_", "body_condition")
 
-# save the plots 
-#ggsave("alive_kde.png", alive.kde.vis, width = 14, height = 11)
-#ggsave("disease_kde.png", disease.kde.vis, width = 14, height = 11)
+# select the healthy individuals for our cases 
+BC <-
+  body_condition %>% filter(
+    masterID %in% body_condition_id$animalID
+  )
+
+# create julian dates and week id for the BC data
+BC <- BC %>%
+  mutate(julian = yday(t1_),
+         week = week(t1_)) 
+
+# calculate the average body condition value based on each duplicated week
+average.week.BC <- BC %>% group_by(masterID, week) %>% 
+  mutate(avg.bc = mean(body_condition)) %>% 
+  dplyr::select(week, avg.bc) %>% 
+  distinct()
+
+average.week.BC
+
+# join the data
+ssfdat2 <- ssfdat1 %>% left_join(average.week.BC, by = c("masterID", "week"))
+ssfdat2 %>% na.omit(.)
+
+# only select complete data with body condition
+comp.trk <- ssfdat2 %>% filter(!is.na(avg.bc)) %>% 
+  mutate(c_avg_BC = ifelse(avg.bc < 4, "under", ifelse(avg.bc < 7, "optimal", "over")) %>% as.factor(.))
+
+comp.trk
+```
+
+Identify the cutoff period to separate the seasons of animals when they were infected vs susceptible -- visualize the density of body condition trends over time - 200 julian days would be a good threshold period.
+```{r season visualization}
+season.vis <- ggplot(comp.trk %>% filter(case_ == TRUE)) +
+  # hot dry season
+  geom_rect(
+    aes(linetype = "hotdry"),
+    xmin = 72,
+    xmax = 191,
+    ymin = 0,
+    ymax = Inf,
+    fill = "purple",
+    alpha = 0.3
+  ) +
+  # rainy
+  geom_rect(
+    aes(linetype = "rainy"),
+    xmin = 192,
+    xmax = 274,
+    ymin = 0,
+    ymax = Inf,
+    fill = "blue",
+    alpha = 0.3
+  ) +
+  # cool dry
+  geom_rect(
+    aes(linetype = "cooldry"),
+    xmin = 275,
+    xmax = 365,
+    ymin = 0,
+    ymax = Inf,
+    fill = "pink",
+    alpha = 0.3
+  ) +
+  geom_rect(
+    aes(linetype = "cooldry"),
+    xmin = 0,
+    xmax = 71,
+    ymin = 0,
+    ymax = Inf,
+    fill = "pink",
+    alpha = 0.3
+  ) +
+  # density of body condition
+  geom_density(aes(day_of_year, fill = c_avg_BC)) +
+  # legend modification
+  scale_fill_manual(
+    values = c(
+      "under" = "red",
+      "optimal" = "orange",
+      "over" = "green"
+    ),
+    name = "body condition"
+  ) +
+  scale_linetype_manual(
+    values = c(
+      "cooldry" = 0,
+      "hotdry" = 0,
+      "rainy" = 0
+    ),
+    name = "season",
+    guide = guide_legend(override.aes = list(fill = c(
+      "purple", "blue", "pink"
+    )))
+  )+ 
+  # group by the master id
+  facet_wrap( ~ masterID, scales = "free")
+
+season.vis
+
+# save the plot 
+#ggsave("multi_season_plot.png", season.vis, width = 14, height = 11)
+```
+by looking at the visualization, the lower body codition happens starting from *hot dry* to *rainy* seasons. - let's check if this trend matches with the modeling fits. (check the model fit 3)
+
+# Plotting the step-length distribution 
+```{r step length distribution across different body conditions, out.width="800px", fig.cap= "Step-length distribution across different body conditions"}
+# season plot
+sl.vis <- comp.trk  %>% filter(case_ == TRUE) %>% dplyr::select(masterID, sl_, c_avg_BC) %>%
+  ggplot(aes(sl_, col = c_avg_BC)) + geom_density(size = 1) +
+  scale_color_manual(
+    name = "Average Body Condition",
+    values = c("orange", "darkgreen", "red"),
+    labels = c("Optimal", "Over", "Under")
+  ) +
+  labs(x = "Step Length (m)", y = "Probability Density") +
+  theme_bw() +
+  facet_wrap( ~ masterID)
+
+sl.vis
+
+# save the plot 
+#ggsave("SL_plot.png", sl.vis, width = 14, height = 11)
 ```
 
 # Individual selection for further analysis
-
-We will select one healthy individual: 21826.2 which shows a less pattern of movement than the other individuals. For the disease-induced individuals, individual 21819.1 can be reasonable to use for comparison analysis. 
-
+Save the selected individuals' track data
 ```{r save the files}
-#write_rds(trk1.alive, path = here("data","trk.healthy.Rdata"))
-#write_rds(trk1.disease, path = here("data","trk.disease.Rdata"))
+#write_rds(comp.trk, path = here("data/finalized_data","multiple_trk.Rdata"))
 ```
 
 ## Footer

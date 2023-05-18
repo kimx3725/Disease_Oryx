@@ -42,6 +42,8 @@ summary(oryx.gps)
 
 # number of oryx = 240
 n_distinct(oryx.gps$collar_ID)
+
+head(oryx.gps)
 ```
 
 Check if there are no missing gps points or timestamps
@@ -105,21 +107,37 @@ oryx.id.df$prev_collar_ID[is.na(oryx.id.df$prev_collar_ID)] <- "NONE"
 summary(oryx.id.df)
 
 # extract the unique values per each ID group 
-oryx.filter.id <-  oryx.id.df %>% 
-          group_by(masterID, collar_ID) %>% 
-          nest(.) %>%
-          mutate(DOB = purrr::map(data, ~dplyr::select(., DOB) %>% distinct),
-                 birth_type = purrr::map(data, ~dplyr::select(., birth_type) %>% distinct),
-                 sex = purrr::map(data, ~ dplyr::select(., sex) %>% distinct),
-                 fate = purrr::map(data, ~dplyr::select(., fate) %>% distinct),
-                 prev_collar_ID = purrr::map(data, ~dplyr::select(., prev_collar_ID) %>% distinct),
-                 date_collared = purrr::map(data, ~dplyr::select(., date_collared) %>% distinct),
-                 date_released = purrr::map(data, ~dplyr::select(., date_released) %>% distinct),
-                 age_at_release = purrr::map(data, ~dplyr::select(., age_at_release) %>% distinct),
-                 death = purrr::map(data, ~dplyr::select(., cause_of_death) %>% distinct),
-                 age_death = purrr::map(data, ~dplyr::select(., age_at_death) %>% distinct),
-                 est_DOD = purrr::map(data, ~dplyr::select(., est_DOD) %>% distinct)) %>% 
-          unnest(birth_type ,DOB, sex, fate, prev_collar_ID, date_collared, date_released, age_at_release,death, age_death, est_DOD) %>% dplyr::select(-data)
+oryx.filter.id <-  oryx.id.df %>%
+  group_by(masterID, collar_ID) %>%
+  nest(.) %>%
+  mutate(
+    Rgroup = purrr::map(data, ~dplyr::select(., Rgroup) %>% distinct),
+    DOB = purrr::map(data, ~ dplyr::select(., DOB) %>% distinct),
+    birth_type = purrr::map(data, ~ dplyr::select(., birth_type) %>% distinct),
+    sex = purrr::map(data, ~ dplyr::select(., sex) %>% distinct),
+    fate = purrr::map(data, ~ dplyr::select(., fate) %>% distinct),
+    prev_collar_ID = purrr::map(data, ~ dplyr::select(., prev_collar_ID) %>% distinct),
+    date_collared = purrr::map(data, ~ dplyr::select(., date_collared) %>% distinct),
+    date_released = purrr::map(data, ~ dplyr::select(., date_released) %>% distinct),
+    age_at_release = purrr::map(data, ~ dplyr::select(., age_at_release) %>% distinct),
+    death = purrr::map(data, ~ dplyr::select(., cause_of_death) %>% distinct),
+    age_death = purrr::map(data, ~ dplyr::select(., age_at_death) %>% distinct),
+    est_DOD = purrr::map(data, ~ dplyr::select(., est_DOD) %>% distinct)
+  ) %>%
+  unnest(
+    Rgroup,
+    birth_type ,
+    DOB,
+    sex,
+    fate,
+    prev_collar_ID,
+    date_collared,
+    date_released,
+    age_at_release,
+    death,
+    age_death,
+    est_DOD
+  ) %>% dplyr::select(-data)
 
 head(oryx.filter.id)
 ```
@@ -137,6 +155,8 @@ nrow(oryx.merge) #1373185
 
 # data structure 
 summary(oryx.merge)
+
+oryx.merge
 ```
 
 Save out files.

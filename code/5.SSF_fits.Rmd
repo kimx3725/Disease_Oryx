@@ -1,0 +1,515 @@
+---
+title: "R01M_SSF"
+author: "Dennis Kim"
+date: "2023-02-13"
+output: html_document
+---
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(here)
+library(tidyverse)
+library(lubridate)
+library(amt)
+library(ggplot2)
+library(broom)
+library(jtools)
+library(huxtable)
+library(cowplot)
+library(glmmTMB)
+library(circular)
+library(raster)
+library(terra)
+library(sp)
+library(sf)
+library(ggthemes)
+options(width = 150)
+
+# set knitr options 
+opts_chunk$set(fig.width = 6, fig.height = 5, comment = NA)
+```
+
+# Read amt trk Data
+
+Tracking amt trk data
+```{r trk data}
+# read the tracking data: R01M
+ssfdat <- read_rds(here::here("data/finalized_data", "finalized_SSF_Multi.Rdata"))
+ssfdat
+```
+
+Add the temperature and season information
+```{r temp_c}
+# read the tracking data
+#trk <- read_rds(here::here("data", "multiple_original_trk.Rdata"))
+#trk %>% head()
+
+# only select the columns that matter for merging (temp)
+#trk <- trk %>% dplyr::select(x_, y_, t_, temp_c) %>% rename(x1_ = 1, y1_ = 2, t1_ = 3)
+#trk %>% head() # check the data
+
+# merge to the original data with temp and season info
+#ssfdat <- ssfdat %>% left_join(trk, by = c("x1_", "y1_", "t1_"))
+
+# filter out the inifinite values 
+ssfdat <- ssfdat %>% filter_all(all_vars(!is.infinite(.)))
+
+# calculate log_sl and cos_ta 
+ssfdat <- ssfdat %>% mutate(
+  log_sl_ = log(sl_),
+  cos_ta_ = cos(ta_)
+)
+
+# filter out the duplicates
+#ssfdat <- ssfdat[!duplicated(ssfdat),]
+
+# remove the unavailable ids
+#ssfdat <- ssfdat %>% 
+  #filter(!masterID %in% c("B03R47_B499F", "R71_G1306M")) 
+
+# get the infection categories
+body_condition_id <- read_rds(here::here("data/finalized_data", "bc_id.Rdata"))
+body_condition_id_infected <- body_condition_id %>% filter(group == "Infected")
+
+ssfdat <- ssfdat %>% mutate(Igroup = ifelse(
+  masterID %in% body_condition_id_infected$animalID,
+  "Infected",
+  "Susceptible"
+))
+
+# relevel the reference base category
+ssfdat$c_avg_BC <- fct_relevel(ssfdat$c_avg_BC, "optimal")
+ssfdat$Igroup <- fct_relevel(ssfdat$Igroup, "Susceptible")
+
+# remove body condition ids 
+
+# arrange by step_id per masterID 
+ssfdat <- ssfdat %>% group_by(masterID) %>% arrange("step_id") %>% ungroup(masterID)
+
+# logical status 
+ssfdat$case_ <- as.logical(ssfdat$case_)
+
+ssfdat %>% summary()
+```
+
+# Explore the data
+```{r , out.width="800px", fig.cap= "Step-length and Turn-angle distribution across different body condition"}
+# plotting the step-length and turn-angle distribution
+
+## sl
+p1 <- ssfdat %>% filter(case_ == TRUE) %>% drop_na(c_avg_BC) %>%
+  dplyr::select(log_sl_, sl_, c_avg_BC, Igroup) %>%
+  ggplot(aes(sl_, col = factor(c_avg_BC))) + geom_density(size = 1) +
+  scale_color_manual(
+    name = "Average Body Condition type",
+    values = c("orange", "purple", "brown"),
+    labels = c("Optimal", "Over", "Under")
+  ) +
+  labs(x =  "Step Length (m)", y = "Density") +
+  theme_bw() + theme(legend.position = "bottom") +
+  facet_wrap(~ Igroup)
+
+p1
+
+## ta 
+p2 <- ssfdat %>% filter(case_ == TRUE) %>% drop_na(c_avg_BC) %>%
+  dplyr::select(ta_, c_avg_BC, Igroup) %>%
+  ggplot(aes(ta_, col = factor(c_avg_BC))) + geom_density(size = 1) +
+  scale_color_manual(
+    name = "Average Body Condition type",
+    values = c("orange", "purple", "brown"),
+    labels = c("Optimal", "Over", "Under")
+  ) +
+  labs(x =  "Turn angle (radians)", y = "Density") +
+  theme_bw() + theme(legend.position = "bottom")+
+  facet_wrap(~ Igroup)
+
+p2
+
+p <-plot_grid(p1, p2, labels = c("A", "B"), ncol = 2, nrow = 1)
+p
+
+# save the plot 
+#ggsave("sl_ta.png", p, width = 20, height = 7)
+```
+
+```{r visualize2}
+# tracks with NDVI values 
+ggplot()+
+  geom_point(data = ssfdat %>% na.omit(.), aes(x=x1_, y=y1_, col=NDVI), size = 1)+
+  theme_bw()+
+  facet_wrap(~masterID)
+
+# body condition values for used and available data
+ggplot(ssfdat, aes(x = avg.bc, y = ..prop.., group = case_, colour = case_))+
+  geom_bar(position = "dodge", aes(fill = case_))+
+  facet_wrap(~masterID)
+
+# factorized body condition data 
+ggplot(ssfdat, aes(x = c_avg_BC, y = ..prop.., group = case_, colour = case_))+
+  geom_bar(position = "dodge", aes(fill = case_))+
+  facet_wrap(~masterID)
+```
+
+# Fitting iSSF model 
+
+# To make coefficient plots
+```{r ssf model fit 1}
+ssffits <- ssfdat %>% 
+  nest_by(masterID) %>%
+  mutate(mod = map(list(data), function(x)
+    (
+      fit_issf(
+      case_ ~ sl_ + log_sl_ + cos_ta_+ NDVI + total_precipitation+ final.shrub+ final.shrub:(c_avg_BC)+ log_sl_:(c_avg_BC)+ log_sl_:(Igroup)+ strata(step_id_),
+      data = x
+    )
+    )))
+
+# summarize fits to individual animals 
+ssffits <- ssffits %>% mutate(tidy = map(list(mod), ~broom::tidy(.x$model)),
+                              n = map_int(list(data), nrow))
+
+# keep just coefficients for comparisons 
+ssf_coefs <- ssffits %>% unnest(tidy) %>% filter(term!= "(Intercept)")
+ssf_coefs <- ssf_coefs %>% dplyr::select(c(masterID, n, term, estimate))
+
+# get the infection categories
+ssf_coefs <- ssf_coefs %>% mutate(Igroup = ifelse(
+  masterID %in% body_condition_id_infected$animalID,
+  "Infected",
+  "Susceptible"
+))
+
+#ssfdat %>% filter(masterID == "B51M") %>% fit_issf(case_ ~ sl_ + log_sl_ + cos_ta_+ NDVI + total_precipitation+ final.shrub+ log_sl_:(c_avg_BC)+ strata(step_id_), data = .)
+
+ssf_coefs
+
+# save the coefficient data frame 
+#write_rds(ssf_coefs, path = here("data/finalized_data", "model_coefficients.Rdata"))
+
+ssf_coefs <- read_rds(here::here("data/finalized_data", "model_coefficients.Rdata"))
+ssf_coefs %>% filter(Igroup == "Infected") %>% filter(term == "log_sl_:c_avg_BCover")
+```
+
+```{r coefficient plots}
+# boxplot
+
+#NDVI
+ssf_coefs %>% filter(!is.na(estimate)) %>%
+  filter(term %in% c("NDVI")) %>% 
+  ggplot(., aes(x = term, y = estimate, fill = Igroup))+
+  geom_boxplot()+
+  geom_jitter(shape = 16, position = position_jitter(0.2))+
+  geom_hline(yintercept = 0)+
+  theme_bw()+
+  theme(legend.position = "none")+
+  facet_wrap(~Igroup)
+
+# Precipitation
+ssf_coefs %>% filter(!is.na(estimate)) %>%
+  filter(term %in% c("total_precipitation")) %>% 
+  ggplot(., aes(x = term, y = estimate, fill = Igroup))+
+  geom_boxplot()+
+  geom_jitter(shape = 16, position = position_jitter(0.2))+
+  geom_hline(yintercept = 0)+
+  scale_x_discrete(labels = c("Precipitation"))+
+  theme_bw()+
+  theme(legend.position = "none")+
+  facet_wrap(~Igroup)
+
+# shrub
+shrub.plot <- ssf_coefs %>% filter(!is.na(estimate)) %>%
+  filter(term %in% c("final.shrub")) %>%
+  ggplot(., aes(x = term, y = estimate, fill = Igroup)) +
+  geom_boxplot() +
+  geom_jitter(shape = 16, position = position_jitter(0.2)) +
+  geom_hline(yintercept = 0, linetype = 2) +
+  scale_x_discrete(labels = c("Shrub")) +
+  ylab("Coefficient estimate") +
+  xlab("")+
+  ggtitle("Use of Woody Vegetation")+
+  theme_bw() +
+  theme(legend.position = "none") +
+  facet_wrap( ~ Igroup)
+
+shrub.plot
+
+# save the plot 
+ggsave("shrub_plot.png", shrub.plot, width = 5, height = 2)
+
+# shrub:avg BC
+shrub_int <- ssf_coefs %>% filter(!is.na(estimate)) %>% 
+  filter(term %in% c("final.shrub:c_avg_BCover","final.shrub:c_avg_BCunder")) %>% 
+  ggplot(., aes(x = term, y = estimate, fill = term))+
+  geom_boxplot()+
+  geom_jitter(shape = 16, position = position_jitter(0.2))+
+  geom_hline(yintercept = 0, linetype = 2)+
+  scale_fill_manual(values = c("#E69F00", "#56B4E9"))+
+  scale_x_discrete(labels = c("Over", "Under"))+
+  ylab("Coefficient estimate")+
+  xlab("")+
+  ggtitle("Use of Woody Vegetation x Body Conditions")+
+  theme_bw()+
+  theme(legend.position = "none")+
+  facet_wrap(~Igroup)
+
+shrub_int
+
+# save the plot 
+ggsave("shrub_int_plot.png", shrub_int, width = 5, height = 2)
+
+# sl 
+sl <- ssf_coefs %>% filter(!is.na(estimate)) %>%
+  filter(term %in% c("log_sl_")) %>% 
+  ggplot(., aes(x = term, y = estimate, fill = Igroup))+
+  geom_boxplot()+
+  geom_jitter(shape = 16, position = position_jitter(0.2))+
+  geom_hline(yintercept = 0, linetype = 2)+
+  scale_x_discrete(labels = c("log(SL)"))+
+  ylab("Coefficient estimate")+
+  xlab("Term")+
+  ggtitle("Step Lengths")+
+  theme_bw()+
+  theme(legend.position = "none")+
+  facet_wrap(~Igroup)
+
+sl
+
+# save the plot 
+ggsave("SL_plot.png", sl, width = 5, height = 2)
+
+# sl x body condition
+sl_bc.plot <- ssf_coefs %>% filter(!is.na(estimate)) %>% 
+  filter(term %in% c("log_sl_:c_avg_BCover","log_sl_:c_avg_BCunder")) %>% 
+  ggplot(., aes(x = term, y = estimate, fill = term))+
+  geom_boxplot()+
+  geom_jitter(shape = 16, position = position_jitter(0.2))+
+  geom_hline(yintercept = 0, linetype = 2)+
+  scale_fill_manual(values = c("#E69F00", "#56B4E9"))+
+  scale_x_discrete(labels = c("log(SL):Over BC", "log(SL):Under BC"))+
+  ylab("Coefficient estimate")+
+  xlab("")+
+  ggtitle("Step Lengths (SL) x Body Conditions (BC)")+
+  theme_bw()+
+  theme(legend.position = "none")+
+  facet_wrap(~Igroup)
+
+sl_bc.plot
+
+# save the plot 
+ggsave("sl_bc_plot.png", sl_bc.plot, width = 5, height = 2)
+ggsave("sl_bc_plot1.png", sl_bc.plot, width = 6, height = 4)
+
+# dotplot
+#ssf_coefs %>% filter(!is.na(estimate)) %>%
+  #filter(term %in% c("NDVI","log_sl_:final_shrub","log_sl_:c_avg_BCover","log_sl_:c_avg_BCunder")) %>% 
+  #ggplot(., aes(x = 1, y = estimate, fill = Igroup)) +
+  #geom_dotplot(binaxis = "y",
+               #stackdir = "center",
+               #dotsize = 0.5) +
+  #geom_hline(yintercept = 0) +
+  #facet_wrap( ~ term, scales = "free")
+
+sl.bc.plot
+
+# save the plot 
+#ggsave("SL_BC_plot.png", sl.bc.plot, width = 14, height = 11)
+```
+
+# Movement Characteristics updates 
+individual fits with categorical average body condition - movement characteristics updates by the environments 
+
+initially, random steps are generated by fitting a tentative gamma distribution to the observed step lengths and a tentativie von Mises distribution to the observed turn angles. It then generates random available points by sampling step-lengths and turn angles from these fitted distributions and combining these random steps with the starting locations associated with each observed movement step.
+
+Now we will adjust these tentative estimates of parameters for the influence of habitat selection. (sl_, log_sl_, and cos_ta_) describe selection-free movement distributions. We include these parameters to update the scale and shape paramters of our tentative distributions -- we will fit iSSF for each individual. 
+```{r individual fits}
+# Individual model fitting in amt 
+ind_id <- unique(ssfdat$masterID) # id indicators 
+
+sl_df <- data.frame(ind_id) # creating a data frame for sl updates 
+tmp <- list() # create an empty list for storing the fitted values 
+
+
+# for-loop
+for(i in 1:length(ind_id)){
+  ind_temp <-subset(ssfdat, masterID == ind_id[i]) # subset the original data by id and store 
+  sl_fit <- amt::fit_distr(ind_temp$sl_[ind_temp$case_ == "TRUE"], "gamma", na.rm=T) # fit tenetative sl distributions
+  sl_df[i,2:3]<-sl_fit$params #store all the necessary params 
+
+#sl_df
+
+##model fitting
+  ssftemp <- ssfdat %>% filter(masterID == ind_id[i]) %>%
+    fit_issf(
+      case_ ~ sl_ + log_sl_ + cos_ta_+ NDVI + total_precipitation+ final.shrub+ sl_:(c_avg_BC)+ sl_:(Igroup)+ log_sl_:(c_avg_BC)+ log_sl_:(Igroup)+ strata(step_id_)
+    )
+  
+  tmp[[i]] <- summary(ssftemp)$coefficients # store the coefficients 
+  
+  ## Update the step-length distribution
+  sl_df[i,4:5] <- update_gamma(dist= sl_fit, 
+                               beta_sl = ssftemp$model$coefficients["sl_"],
+                               beta_log_sl = ssftemp$model$coefficients["log_sl_"])$params
+  
+  #step-length distribution for over average body condition
+  sl_df[i,6:7] <- update_gamma(dist = sl_fit,
+                               beta_sl = ssftemp$model$coefficients["sl_"] + ssftemp$model$coefficients["sl_:c_avg_BCover"],
+                               beta_log_sl = ssftemp$model$coefficients["log_sl_"] +  ssftemp$model$coefficients["log_sl_:c_avg_BCover"])$params
+  
+  #step-length distribution for under average body condition
+  sl_df[i,8:9] <- update_gamma(dist = sl_fit,
+                               beta_sl = ssftemp$model$coefficients["sl_"] + ssftemp$model$coefficients["sl_:c_avg_BCunder"],
+                               beta_log_sl = ssftemp$model$coefficients["log_sl_"] + ssftemp$model$coefficients["log_sl_:c_avg_BCunder"])$params
+  
+}
+
+coefficients <-do.call(rbind, tmp) # save all the coefficients per id 
+
+# rename the columns of the updated distributions of grouping sl dist
+names(sl_df)[4:9] <-c("optimal_shape", "optimal_scale",
+                       "over_shape", "over_scale","under_shape", "under_scale") 
+
+sl_df$optimal_mean <- sl_df$optimal_scale*sl_df$optimal_shape
+sl_df$over_mean <- sl_df$over_scale*sl_df$over_shape
+sl_df$under_mean <- sl_df$under_scale*sl_df$under_shape
+
+head(sl_df)
+
+mean_sl_df <- sl_df %>% dplyr::select(ind_id, over_mean, optimal_mean, under_mean) 
+mean_sl_df
+
+#write_rds(sl_df, path = here("data/finalized_data","Updated_sl_dist.Rdata"))
+```
+
+Plot the updated mean distributions of the sl per individual 
+```{r mean updated sl}
+# get the infection categories
+body_condition_id <- read_rds(here::here("data/finalized_data", "bc_id.Rdata"))
+body_condition_id_infected <- body_condition_id %>% filter(group == "Infected")
+
+# grouping by infection status 
+mean_sl_df <- mean_sl_df %>% mutate(Igroup = ifelse(
+  ind_id %in% body_condition_id_infected$animalID,
+  "Infected",
+  "Susceptible"
+))
+
+mean_sl_df 
+
+# from wide to long
+mean_sl_df1 <- gather(mean_sl_df, condition, sl_mean, over_mean:under_mean, factor_key = TRUE)
+mean_sl_df1$condition <- factor(mean_sl_df1$condition, levels = c("under_mean", "optimal_mean", "over_mean"))
+
+mean_sl_df1
+
+# visualization
+
+# across body condition 
+updated_sl_mean_plot <-  ggplot(mean_sl_df1, aes(x = condition, y = sl_mean, fill = condition))+
+  geom_boxplot()+
+  geom_jitter(shape = 16, position = position_jitter(0.2))+
+  geom_hline(yintercept = 0, linetype = 2)+
+  scale_fill_manual(values = c("tomato", "#E69F00", "#56B4E9"))+
+  scale_x_discrete(labels = c("Under", "Optimal", "Over"))+
+  ylab("Mean Step Length")+
+  xlab("")+
+  ggtitle("Distribution of Mean Step Lengths Across Individuals")+
+  theme_bw()+
+  theme(legend.position = "none")+
+  facet_wrap(~Igroup)
+
+updated_sl_mean_plot
+
+# save the plot 
+ggsave("updated_sl_mean_plot.png", updated_sl_mean_plot, width = 5, height = 2)
+```
+
+
+New, we can plot the original and updated distributions for each body condition 
+```{r updated sl}
+# step lengths 
+
+plot_sl <- list()
+  
+col <-c(NA,"forestgreen", "tomato", "blue")
+
+for(i in 2:nrow(sl_df)){
+  # data.frame for plotting
+  plot_sl[[i]] <- data.frame(x = rep(NA, 200))
+  
+  # x-axis is sequence of possible step lengths
+  plot_sl[[i]]$x <- seq(from = 0, to = 0.1, length.out = 200)
+  
+  # y-axis is the probability density under the given gamma distribution
+  
+  # optimal 
+  plot_sl[[i]]$optimal <- dgamma(x = plot_sl[[i]]$x,
+                              shape = sl_df[i,"optimal_shape"],
+                              scale = sl_df[i,"optimal_scale"])
+  
+  # over
+  plot_sl[[i]]$over <- dgamma(x = plot_sl[[i]]$x,
+                              shape = sl_df[i,"over_shape"],
+                              scale = sl_df[i,"over_scale"])
+  
+  # under
+  plot_sl[[i]]$under <- dgamma(x = plot_sl[[i]]$x,
+                              shape = sl_df[i,"under_shape"],
+                              scale = sl_df[i,"under_scale"])
+  
+  # id 
+  plot_sl[[i]]$id <- sl_df[i, "ind_id"]
+} 
+
+plot_sl
+
+# rbind all the list of dataframe 
+plot_sl_all <-do.call(rbind, plot_sl)
+
+plot_sl_all
+
+# Pivot from wide to long data
+plot_sl_all <- plot_sl_all %>% 
+  pivot_longer(cols = -c(x, id))
+
+# remove the infinity value 
+plot_sl_all <-plot_sl_all %>% filter_all(all_vars(!is.infinite(.)))
+
+# get the infection categories
+plot_sl_all <- plot_sl_all %>% mutate(Igroup = ifelse(
+  id %in% c("R01M",
+            "B49M",
+            "R71_G1315M",
+            "B74M",
+            "R71_G1306M"),
+  "infected",
+  "susceptible"
+))
+
+plot_sl_all
+
+# plot 
+p1<-ggplot(plot_sl_all, aes(x = x, y = value, color = factor(name))) +
+  geom_line(size = 1) +
+  scale_color_manual(name = "Body-condition",
+                       breaks = c("optimal", "over", "under"),
+                       values = c("forestgreen", "tomato", "blue")) +
+  xlim(0, 0.08)+
+  xlab("Step Length (m)") +
+  ylab("Density") +
+  theme_bw()+
+  theme(legend.position = "bottom")+
+  facet_wrap(~Igroup)
+
+p1
+
+# save the plot 
+#ggsave("updated_sl.png", p1, width = 20, height = 7)
+```
+
+# Footer
+```{r footer}
+sessionInfo()
+```
