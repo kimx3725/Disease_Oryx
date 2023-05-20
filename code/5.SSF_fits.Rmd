@@ -91,7 +91,7 @@ ssfdat <- ssfdat %>% group_by(masterID) %>% arrange("step_id") %>% ungroup(maste
 # logical status 
 ssfdat$case_ <- as.logical(ssfdat$case_)
 
-ssfdat %>% summary()
+ssfdat
 ```
 
 # Explore the data
@@ -240,14 +240,18 @@ shrub.plot
 ggsave("shrub_plot.png", shrub.plot, width = 5, height = 2)
 
 # shrub:avg BC
-shrub_int <- ssf_coefs %>% filter(!is.na(estimate)) %>% 
-  filter(term %in% c("final.shrub:c_avg_BCover","final.shrub:c_avg_BCunder")) %>% 
+final.shrub.int.ceoffs <- ssf_coefs %>% filter(!is.na(estimate)) %>% 
+  filter(term %in% c("final.shrub:c_avg_BCover","final.shrub:c_avg_BCunder"))
+
+final.shrub.int.ceoffs$term <- factor(final.shrub.int.ceoffs$term, levels = c("final.shrub:c_avg_BCunder", "final.shrub:c_avg_BCover"))  
+  
+shrub_int <- final.shrub.int.ceoffs %>% 
   ggplot(., aes(x = term, y = estimate, fill = term))+
   geom_boxplot()+
   geom_jitter(shape = 16, position = position_jitter(0.2))+
   geom_hline(yintercept = 0, linetype = 2)+
-  scale_fill_manual(values = c("#E69F00", "#56B4E9"))+
-  scale_x_discrete(labels = c("Over", "Under"))+
+  scale_fill_manual(values = c("tomato", "#56B4E9"))+
+  scale_x_discrete(labels = c("Under", "Over"))+
   ylab("Coefficient estimate")+
   xlab("")+
   ggtitle("Use of Woody Vegetation x Body Conditions")+
@@ -287,7 +291,7 @@ sl_bc.plot <- ssf_coefs %>% filter(!is.na(estimate)) %>%
   geom_boxplot()+
   geom_jitter(shape = 16, position = position_jitter(0.2))+
   geom_hline(yintercept = 0, linetype = 2)+
-  scale_fill_manual(values = c("#E69F00", "#56B4E9"))+
+  scale_fill_manual(values = c("tomato", "#56B4E9"))+
   scale_x_discrete(labels = c("log(SL):Over BC", "log(SL):Under BC"))+
   ylab("Coefficient estimate")+
   xlab("")+
@@ -413,11 +417,11 @@ updated_sl_mean_plot <-  ggplot(mean_sl_df1, aes(x = condition, y = sl_mean, fil
   geom_hline(yintercept = 0, linetype = 2)+
   scale_fill_manual(values = c("tomato", "#E69F00", "#56B4E9"))+
   scale_x_discrete(labels = c("Under", "Optimal", "Over"))+
-  ylab("Mean Step Length")+
+  ylab("Mean Step Length (m)")+
   xlab("")+
   ggtitle("Distribution of Mean Step Lengths Across Individuals")+
   theme_bw()+
-  theme(legend.position = "none")+
+  theme(legend.position = "none", axis.title.y = element_text(size=7))+
   facet_wrap(~Igroup)
 
 updated_sl_mean_plot

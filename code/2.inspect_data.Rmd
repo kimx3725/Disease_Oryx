@@ -99,10 +99,10 @@ multiple_oryx <-
 multiple_oryx
 
 # remove the original data to reduce the memory capacity 
-rm(oryx)
-rm(disease_id)
-rm(susceptible_id)
-rm(body_condition_id)
+#rm(oryx)
+#rm(disease_id)
+#rm(susceptible_id)
+#rm(body_condition_id)
 
 # change the time format of the data 
 multiple_oryx$date <- multiple_oryx$date <- as.POSIXct(multiple_oryx$date, format = "%Y-%m-%d %H:%M:%S")
@@ -143,15 +143,15 @@ Add shrubs and trees layers
 # read the saved merged final raster layer 
 shrub_raster <- raster("E:/disease_oryx/data/env_data/shrub/final.shrub.tif")
 crs(shrub_raster)
-
+plot(shrub_raster)
 # reproject 
-shrub_raster1 <- projectRaster(shrub_raster, crs = "+proj=longlat +datum=WGS84")
-shrub_raster1
+#shrub_raster1 <- projectRaster(shrub_raster, crs = "+proj=longlat +datum=WGS84")
+#shrub_raster1
 
 #writeRaster(shrub_raster1, filename = "E:/disease_oryx/data/env_data/shrub/final.shrub1.tif", format = "GTiff")
 
 # plot the shrub raster
-plot(shrub_raster1)
+#plot(shrub_raster1)
 
 # extract the shrub layers 
 #multiple_oryx <- cbind(extract(shrub_raster, multiple_oryx[,c("utm_e", "utm_n")], df = T), multiple_oryx) %>% dplyr::select(-ID)
@@ -164,11 +164,11 @@ plot(shrub_raster1)
 Add a track class to the data and summarize the data 
 ```{r amt conversion}
 # make tracks 
-trk <-
+trk <- multiple_oryx %>% 
   amt::make_track(
-    multiple_oryx,
-    .x = long,
-    .y = lat,
+    .,
+    .x = utm_e,
+    .y = utm_n,
     .t = date,
     masterID = masterID,
     collar_id = collar_ID,
@@ -181,7 +181,7 @@ trk <-
     date_released = date_released,
     cause_of_death = cause_of_death,
     Igroup = Igroup,
-    crs = CRS("+init=epsg:32634")
+    crs = st_crs(4326)
   ) 
 
 trk
@@ -189,59 +189,27 @@ trk
 # save the tracking data 
 #write_rds(trk, path = here("data","multiple_original_trk.Rdata"))
 
-# calculate day/night from the movement track 
-trk$hour <- hour(trk$t_) # calculate the hour
-trk$tod <- ifelse(trk$hour < 7 | 19 < trk$hour, "night", "day") # day/night
-trk %>% summary()
-```
+# check the sampling rates 
+trk %>% nest(data = -"masterID") %>%  mutate(sr = map(data, summarize_sampling_rate)) %>%
+  dplyr::select(masterID, sr) %>%
+  unnest(cols = sr) %>% print(n = nrow(trk))
 
-# Movement characteristics
+# calculate the step lengths and speed to see if it's reasonable 
+tr_check <-
+  trk %>% nest(data = -"masterID") %>% 
+  mutate(data = map(data, ~ .x %>% steps())) %>%
+  unnest(cols = data) %>%
+  mutate(speed = ((sl_) / as.numeric(dt_)))
 
-Calculate step lengths and net squared displacements for each individual, then rbind the data back together. 
-```{r movement characteristics}
-# nest data by id and add columns to each nested column of data (sl and nsd)
-trk1 <- trk %>% nest_by(masterID) %>%
-  mutate(sl_ = map(list(data), step_lengths),
-         nsd = map(list(data), nsd)) %>%
-  unnest()
+tr_check %>% head()
 
-# calculate year, month, week of each observation and append these to the dataset 
-trk1 <- trk1 %>% mutate(
-  year = year(t_),
-  month = month(t_),
-  week = week(t_),
-  day_of_year = yday(t_)
-)
-```
+##check the summary of the data
+summary(tr_check$speed) ##Check the spread of the speed
+summary(tr_check$sl_)
+summary(as.numeric(tr_check$dt_))
 
-## Net-squared displacement over time for each individual 
-```{r nsd visualization}
-nsd.vis <- ggplot(trk1, aes(x = t_, y = nsd))+ geom_path()+
-  facet_wrap(~masterID, scales = "free")+
-  ylab("NSD")+
-  xlab("Time")+
-  ggtitle("Net-squared displacement over time for each individual")
-
-nsd.vis
-
-# save the plot 
-#ggsave("nsd.png", nsd.vis, width = 14, height = 11)
-```
-
-## Step length distribution by day/night 
-```{r sl visualization, message=FALSE, warning=FALSE}
-# alive
-sl.dnight <- ggplot(trk1, aes(x= tod, y= log(sl_)))+
-  geom_boxplot()+ geom_smooth()+
-  facet_wrap(~masterID)+
-  ylab("Log(SL)")+
-  xlab("Time of day")+
-  ggtitle("Step Legnths over time of the day")
-
-sl.dnight
-
-# save the plot 
-#ggsave("sl_dnight.png", sl.dnight, width = 14, height = 11)
+# speed distribution
+ggplot(tr_check) + geom_histogram(aes(x = speed), fill = "blue") + theme_bw()
 ```
 
 # Resample the tracking data and generate the random points 
@@ -250,18 +218,26 @@ sl.dnight
 trk %>% amt::summarize_sampling_rate_many(c("masterID"))
 
 # regularize the steps and generate random steps 
-ssfdat <- trk %>% nest_by(masterID) %>% mutate(
-  resample = map(
-    list(data),
-    ~ .x %>% track_resample(rate = hours(1), tolerance = minutes(30)) %>%
-      filter_min_n_burst() %>%
-      steps_by_burst() %>%
-      random_steps() %>% 
-      extract_covariates(shrub_raster1)
-  )
-) %>% dplyr::select(-data) %>% unnest() %>% ungroup()
+ssfdat <- trk %>% nest(data = -masterID) %>% 
+  mutate(
+    data = map(
+      data,
+      ~ .x %>% 
+        track_resample(rate = hours(1), tolerance = minutes(30)) %>%
+        filter_min_n_burst(min_n = 3) %>%
+        steps_by_burst() %>%
+        random_steps() %>% 
+        extract_covariates(shrub_raster)
+      )
+    ) %>% unnest(cols = data) 
 
-ssfdat
+ssfdat <- ssfdat %>% mutate(
+  log_sl_ = log(sl_),
+  cos_ta_ = cos(ta_),
+  speed = sl_ / (as.numeric(dt_))
+)
+
+glimpse(ssfdat)
 ```
 
 # seasons 
@@ -280,7 +256,7 @@ ssfdat1 <- ssfdat %>%
   mutate(season_level = replace_na(season_level, "cooldry")) %>%
   ungroup()
 
-ssfdat1
+ssfdat1 %>% glimpse()
 ```
 
 # body condition 

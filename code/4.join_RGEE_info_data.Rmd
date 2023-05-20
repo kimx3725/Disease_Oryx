@@ -25,9 +25,10 @@ opts_chunk$set(fig.width = 6, fig.height = 5, comment = NA)
 ssf data
 ```{r read data}
 # read the tracking data: R01M
-ssfdat <- read_rds(here::here("data/finalized_data", "multiple_trk.Rdata"))
+ssfdat <- read_rds(here::here("data/finalized_data", "multiple_trk_modified.Rdata"))
 
-ssfdat
+# only select the lon lat data
+ssfdat <- ssfdat %>% dplyr::select(-c("x1_", "x2_", "y1_", "y2_")) %>% rename(., x1_ = coords.x1, y1_ = coords.y1, x2_ = coords.x2, y2_ = coords.y2)
 ```
 
 # Prepare environmental data
@@ -38,6 +39,17 @@ Bring all the environmental data
 # used locations 
 use.NDVI <- read_rds(here::here("data/env_data", "Multi_SSF_NDVI_use.Rdata"))
 use.PRC <- read_rds(here::here("data/env_data", "Multi_SSF_PRC_use.Rdata"))
+use_ssf <- ssfdat %>% filter(case_ == TRUE)
+
+# round by 5 digits 
+use_ssf$x1_ <- round(use_ssf$x1_, digits = 5)
+use_ssf$y1_ <- round(use_ssf$y1_, digits = 5)
+
+use.NDVI$lon <- round(use.NDVI$lon, digits = 5)
+use.NDVI$lat <- round(use.NDVI$lat, digits = 5)
+
+use.PRC$lon <- round(use.PRC$lon, digits = 5)
+use.PRC$lat <- round(use.PRC$lat, digits = 5)
 
 # select applicable columns and change the col names to match the ssf data
 use.NDVI <- use.NDVI %>% dplyr::select(lon, lat,  Date, id, NDVI) %>% rename_with(.cols = c(1:4), ~c("x1_","y1_","t1_", "masterID"))
@@ -52,7 +64,7 @@ ssfdat %>% filter(case_ == TRUE) %>% left_join(use.PRC, by = c("x1_", "y1_","t1_
 
 
 # NDVI
-use_ssf <- ssfdat %>% filter(case_ == TRUE) %>% left_join(use.NDVI, by = c("x1_", "y1_","t1_", "masterID"))
+use_ssf <- use_ssf %>% left_join(use.NDVI, by = c("x1_", "y1_","t1_", "masterID"))
 # total precipitation
 use_ssf <- use_ssf %>% left_join(use.PRC, by = c("x1_", "y1_","t1_", "masterID"))
 
@@ -62,7 +74,7 @@ use_ssf <- use_ssf %>% group_by(masterID) %>% arrange(step_id_) %>% ungroup()
 # get rid of the duplicated rows
 use_ssf <- use_ssf[!duplicated(use_ssf),]
 
-use_ssf 
+use_ssf %>% na.omit(NDVI, total_precipitation) %>% summary()
 ```
 
 ```{r random}
@@ -89,7 +101,7 @@ random.NDVI
 random_ssf <- random_ssf %>% left_join(random.NDVI[!duplicated(random.NDVI),], by = c("x2_", "y2_", "t2_", "masterID")) # NDVI
 random_ssf <- random_ssf %>% left_join(random.PRC[!duplicated(random.PRC),], by = c("x2_", "y2_", "t2_", "masterID")) # total precipitation
 
-random_ssf %>% summary()
+random_ssf %>% na.omit(NDVI, total_precipitation) %>% summary()
 ```
 
 bind all the observed and random locations together 

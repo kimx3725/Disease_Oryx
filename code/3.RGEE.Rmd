@@ -14,6 +14,7 @@ library(tidyverse)
 library(lubridate)
 library(amt)
 library(sf)
+library(proj4)
 
 options(width = 150)
 
@@ -25,15 +26,29 @@ opts_chunk$set(fig.width = 6, fig.height = 5, comment = NA)
 ```{r read data}
 # read the tracking R01M
 ssfdat <- read_rds(here::here("data/finalized_data", "multiple_trk.Rdata"))
+ssfdat
+
+# since our coordinate systems are in utm -- we will convert it to the lat long 
+x1_coords <- ssfdat %>% st_as_sf(., coords = c("x1_", "y1_"), crs = "epsg:32634") %>% st_transform(., crs = "epsg:4326") %>% st_coordinates()
+colnames(x1_coords) <- c("coords.x1", "coords.y1")
+
+x2_coords <- ssfdat %>% st_as_sf(., coords = c("x2_", "y2_"), crs = "epsg:32634") %>% st_transform(., crs = "epsg:4326") %>% st_coordinates()
+colnames(x2_coords) <- c("coords.x2", "coords.y2")
+
+ssfdat1 <- cbind(ssfdat, x1_coords, x2_coords)
+ssfdat1
+
+# save the data 
+#write_rds(ssfdat1, path = here("data/finalized_data", "multiple_trk_modified.Rdata"))
 
 # select applicable columns and rename them 
 
-# use locations 
-use <- ssfdat %>% dplyr::filter(case_ == TRUE) %>% dplyr::select(x1_, y1_, t1_, case_, masterID) %>% rename_with(.cols = c(1:5), ~c("x_","y_","t_","case", "id"))
-use 
+## use locations 
+use <- ssfdat1 %>% dplyr::filter(case_ == TRUE) %>% dplyr::select(coords.x1, coords.y1, t1_, case_, masterID) %>% rename_with(.cols = c(1:5), ~c("x_","y_","t_","case", "id"))
+use
 
-# random locations
-random <- ssfdat %>% dplyr::filter(case_ == FALSE) %>% dplyr::select(x2_, y2_, t2_, case_, masterID) %>% rename_with(.cols = c(1:5), ~c("x_","y_","t_","case", "id"))
+## random locations
+random <- ssfdat1 %>% dplyr::filter(case_ == FALSE) %>% dplyr::select(coords.x2, coords.y2, t2_, case_, masterID) %>% rename_with(.cols = c(1:5), ~c("x_","y_","t_","case", "id"))
 random
 ```
 
@@ -206,6 +221,7 @@ for(x in unique(use$uniq)){
 }
 
 end_time <- Sys.time()
+end_time
 ```
 
 The new sf data frame with the pixel values in now stored as the dataoutput object. You can use this for further analysis.
@@ -220,7 +236,7 @@ use.NDVI.df <- use.NDVI.dataoutput %>% mutate(lon = sf::st_coordinates(.)[,1],
 use.NDVI.df
 
 # save the data 
-#write_rds(use.NDVI.df, path = here("data/env_data", "Multi_SSF_NDVI_use.Rdata"))
+write_rds(use.NDVI.df, path = here("data/env_data", "Multi_SSF_NDVI_use.Rdata"))
 
 rm(use.NDVI.dataoutput)
 rm(use.NDVI.df)
@@ -255,7 +271,8 @@ for(x in unique(random$uniq)){
   random.NDVI.dataoutput <- rbind(random.NDVI.dataoutput, temp)
 }
 
-end_time <- Sys.time()
+end_time1 <- Sys.time()
+end_time1
 ```
 
 The new sf data frame with the pixel values in now stored as the dataoutput object. You can use this for further analysis.
@@ -270,7 +287,7 @@ random.NDVI.df <- random.NDVI.dataoutput %>% mutate(lon = sf::st_coordinates(.)[
 random.NDVI.df
 
 # save the data 
-#write_rds(random.NDVI.df, path = here("data/env_data", "Multi_SSF_NDVI_random.Rdata"))
+write_rds(random.NDVI.df, path = here("data/env_data", "Multi_SSF_NDVI_random.Rdata"))
 
 # remove the output for faster running - reducing the memory usage
 rm(random.NDVI.dataoutput)
@@ -327,7 +344,8 @@ for(x in unique(use$uniq)){
   use.PRC.dataoutput <- rbind(use.PRC.dataoutput, temp)
 }
 
-end_time <- Sys.time()
+end_time2 <- Sys.time()
+end_time2
 ```
 
 The new sf data frame with the pixel values in now stored as the dataoutput object. You can use this for further analysis.
@@ -342,7 +360,7 @@ use.PRC.df <- use.PRC.dataoutput %>% mutate(lon = sf::st_coordinates(.)[,1],
 use.PRC.df
 
 # save the data 
-#write_rds(use.PRC.df, path = here("data/env_data", "Multi_SSF_PRC_use.Rdata"))
+write_rds(use.PRC.df, path = here("data/env_data", "Multi_SSF_PRC_use.Rdata"))
 
 # remove the output for faster running - reducing the memory usage
 rm(use.PRC.dataoutput)
@@ -394,7 +412,7 @@ random.PRC.df <- random.PRC.dataoutput %>% mutate(lon = sf::st_coordinates(.)[,1
 random.PRC.df
 
 # save the data 
-#write_rds(random.PRC.df, path = here("data/env_data", "Multi_SSF_PRC_random.Rdata"))
+write_rds(random.PRC.df, path = here("data/env_data", "Multi_SSF_PRC_random.Rdata"))
 ```
 
 # Visualize locations
