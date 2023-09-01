@@ -52,7 +52,6 @@ summary(oryx)
 # Multiple Individuals 
 
 Referenced by Katherine Mertes -- select healthy and infected individuals within the same release group (R4)
-
 ```{r indicators}
 # check the disease individuals -- that are dead - filter individuals that have at least 1000 location points
 disease_id <- oryx %>% filter(Rgroup == 4) %>% filter(cause_of_death %in% c("disease", "presumed disease")) %>% nest_by(masterID) %>% mutate(rows = nrow(data)) %>% dplyr::select(-data) %>% filter(rows > 1000) 

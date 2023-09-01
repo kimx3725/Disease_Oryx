@@ -1,0 +1,136 @@
+---
+title: "7.SSF_updated_sl_IF"
+author: "Dennis Kim"
+date: "2023-07-12"
+output: html_document
+---
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(here)
+library(tidyverse)
+library(lubridate)
+library(amt)
+library(ggplot2)
+library(broom)
+library(jtools)
+library(huxtable)
+library(cowplot)
+library(glmmTMB)
+library(circular)
+library(raster)
+library(terra)
+library(sp)
+library(sf)
+library(ggthemes)
+options(width = 150)
+
+# set knitr options 
+opts_chunk$set(fig.width = 6, fig.height = 5, comment = NA)
+```
+
+# Read amt trk Data
+
+Tracking amt trk data
+```{r trk data}
+# read the tracking data: R01M
+ssfdat <- read_rds(here::here("data/finalized_data", "finalized_SSF_Multi.Rdata"))
+ssfdat %>% summary()
+```
+
+Add the temperature and season information
+```{r temp_c}
+# filter out the inifinite values 
+ssfdat <- ssfdat %>% filter_all(all_vars(!is.infinite(.)))
+
+# calculate log_sl and cos_ta 
+ssfdat <- ssfdat %>% mutate(
+  log_sl_ = log(sl_),
+  cos_ta_ = cos(ta_)
+)
+
+# get the infection categories
+body_condition_id <- read_rds(here::here("data/finalized_data", "bc_id.Rdata"))
+body_condition_id_infected <- body_condition_id %>% filter(group == "Infected")
+
+ssfdat <- ssfdat %>% mutate(Igroup = ifelse(
+  masterID %in% body_condition_id_infected$animalID,
+  "Infected",
+  "Susceptible"
+))
+
+# relevel the reference base category
+ssfdat$c_avg_BC <- fct_relevel(ssfdat$c_avg_BC, "optimal")
+ssfdat$Igroup <- fct_relevel(ssfdat$Igroup, "Susceptible")
+
+# remove body condition ids 
+
+# arrange by step_id per masterID 
+ssfdat <- ssfdat %>% group_by(masterID) %>% arrange("step_id") %>% ungroup(masterID)
+
+# logical status 
+ssfdat$case_ <- as.logical(ssfdat$case_)
+
+summary(ssfdat)
+```
+
+Identify individual's infection conditions based on the periods of their movement reduction
+```{r infection groups}
+# 12 days filteration based on the reports by SCBI group
+
+# Susceptibles
+
+# select only susceptible ones
+Susceptibles <- ssfdat %>% filter(Igroup == "Susceptible")
+Susceptibles$Istatus <- Susceptibles$Igroup
+
+# Infecteds
+
+# select only infected ones
+Infecteds <- ssfdat %>% filter(Igroup == "Infected")
+Infecteds$Istatus <- "Susceptible"
+Infecteds$day <- day(Infecteds$t2_)
+
+Infecteds <- Infecteds %>%
+  group_by(masterID) %>%
+  mutate(Istatus = ifelse(day > max(day) - 12 & day < max(day),
+                          "Infected",
+                          Istatus))
+
+Infecteds$Istatus <- fct_relevel(Infecteds$Istatus, "Susceptible")
+Infecteds <- Infecteds %>% dplyr::select(-day)
+
+# combine the susceptible and infected individuals to the original data
+final.data <- rbind(Susceptibles, Infecteds)
+
+colnames(final.data)[25] <- "fate"
+colnames(final.data)[26] <- "infected"
+
+summary(final.data)
+```
+
+```{r data modification}
+# change the Infection group name differently (susceptible to non-infected) - pre - active 
+final.data1 <- final.data %>% mutate(fate = ifelse(fate == "Susceptible", "Non_infected", "Infected"))
+final.data1$fate <- factor(final.data1$fate)
+final.data1$fate <- fct_relevel(final.data1$fate, "Non_infected")
+final.data1 %>% summary()
+
+final.data2 <- final.data1 %>% mutate(infected = ifelse(infected == "Susceptible", "pre", "active"))
+final.data2$infected <- factor(final.data2$infected)
+final.data2$infected <- fct_relevel(final.data2$infected, "pre")
+
+summary(final.data2)
+```
+
+save the finalized data 
+```{r save the finalized data}
+#write_rds(final.data2, path = here("data/finalized_data","final_multi.Rdata"))
+```
+
+# Footer
+```{r footer}
+sessionInfo()
+```

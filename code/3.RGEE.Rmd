@@ -24,7 +24,7 @@ opts_chunk$set(fig.width = 6, fig.height = 5, comment = NA)
 
 # Read Data
 ```{r read data}
-# read the tracking R01M
+# read the tracking
 ssfdat <- read_rds(here::here("data/finalized_data", "multiple_trk.Rdata"))
 ssfdat
 
