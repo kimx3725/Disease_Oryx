@@ -1,0 +1,162 @@
+---
+title: "4b.data_prep_HMM_2"
+author: "Dennis Kim"
+date: "2024-01-08"
+output: html_document
+---
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(dplyr)
+library(readr)
+library(data.table)
+library(here)
+library(stringr)
+library(tidyr)
+library(purrr)
+library(lubridate)
+library(devtools)
+
+# call environmental data
+library(terra)
+
+# analysis
+library(momentuHMM)
+library(adehabitatLT)
+library(hmmSSF)
+
+# visualization 
+library(ggplot2)
+
+options(width = 150)
+```
+
+## 1.1. Format of tracking data
+
+Read in the gps data
+```{r read in data}
+# Location data of the oryx S
+oryx <- readr::read_rds(here::here("data/HMM_SSF", "oryx_trk.Rdata"))
+
+# re-check the data - the listed 4 individuals were re-captured and tested positive for the diesases: B69F, B05M, B49M, B74M
+oryx %>% filter(masterID == "B43M")
+
+# looks like the num_id doesn't match with the previous explanatory figure as well- let's keep the cod df num_id from now on
+# get rid of certain columns 
+oryx <- oryx %>% dplyr::select(-c("fate", "cause_of_death", "Igroup", "num_id"))
+
+# summary of the location data 
+summary(oryx)
+
+# call the true cause of death information
+cod <- readr::read_rds(here::here("data/HMM_SSF", "cause_of_death_id.Rdata"))
+cod
+
+# filter out only rainy season data 
+rain <- oryx %>% filter(season_level == "rainy")
+rain_cod <- cod %>% filter(season_level == "rainy")
+
+summary(rain)
+summary(rain_cod)
+
+# left join the data 
+rain_cod_id <- rain_cod %>% dplyr::select(masterID, num_id, cause_of_death) %>% distinct(masterID, num_id, cause_of_death)
+rain_oryx <- rain %>% left_join(rain_cod_id, by = c("masterID"))
+rain_oryx
+```
+
+Reformat the data and filter the necessary data inputs only -- The locations need to be projected from long-lat to E-N prior to analysis, as the package uses Euclidean (planar) eometry to derive metrics such as step lenths and turning analges. They also need to be at a regular time interval. 
+```{r data reformat}
+oryx.df <- rain_oryx %>% dplyr::select(num_id, utm_e, utm_n, date)
+colnames(oryx.df) <- c("ID", "x", "y", "time")
+oryx.df
+```
+
+```{r trk visualization}
+# visualize the path 
+ggplot(oryx.df, aes(x, y, group = NA, col = factor(ID)))+
+  geom_path()+
+  geom_point(size = 0.2)+
+  coord_equal()
+```
+
+look at the track 
+```{r control steps}
+oryx.prep <- hmmSSF::get_controls(obs = oryx.df, n_controls = 5, distr = "gamma")
+oryx.df1 <- oryx.prep %>% filter(obs == 1)
+```
+
+extract shrub cover information
+```{r shrub cover}
+# call shrub cover
+shrub <- terra::rast("D:/Oryx/data/env_data/shrub/final.shrub.tif")
+shrub
+
+# extract shrub values from the ratser
+shrub <- terra::extract(shrub, oryx.df1[, c("x", "y")]) 
+oryx.df1$shrub <- shrub[, -1]
+
+# create a dataframe
+data <- oryx.df1
+data
+
+# set unrealistic step lengths as NAs and the rest of the location and angle as NA as well.
+data <- data %>% mutate(step = ifelse(step > 5000 | step == 0, NA, step))
+data <- data %>% mutate(x = ifelse(is.na(step), NA, x)) %>% mutate(y = ifelse(is.na(step), NA, y)) %>% mutate(angle = ifelse(is.na(step), NA, step))
+
+# only select the valid columns for converting data to data_hmm
+data_na <- data %>% dplyr::select(ID, x, y, time, shrub)
+data_na
+
+# bring the body condition information
+data_bc <- rain_oryx %>% dplyr::select(num_id, date, c_avg_BC) %>% distinct(num_id, date, c_avg_BC)
+colnames(data_bc) <- c("ID", "time", "c_avg_BC")
+data_bc
+
+# left join the data 
+tot_df <- data_na %>% left_join(data_bc, by = c("ID", "time"))
+```
+
+include infection status information
+```{r infection info}
+infected.id <- c(11, 18, 22, 36)
+
+# individuals that do not have infection test info
+non_inf_df <- tot_df %>% filter(! ID %in% infected.id)
+non_inf_df <- non_inf_df %>% mutate(infection = NA) # add infection columns with NAs
+non_inf_df
+
+# 4 infected individuals
+id11 <- tot_df %>% filter(ID == 11) # B74M - death (test) time: 09.22.2018 - but dead by the time recapture (assume 2 weeks prior to death considered infection)
+id18 <- tot_df %>% filter(ID == 18) # B69F - death (test) time: 09.25.2018 - but dead by the time recapture (assume 2 weeks prior to death considered infection)
+id22 <- tot_df %>% filter(ID == 22) # B49M - test time: 09.22.2018 - not dead yet
+id36 <- tot_df %>% filter(ID == 36) # B05M - death time: 09.17.2018 - never captured (assume 2 weeks prior to death considered infection) 
+
+# set the infection time
+
+## those that were tested positive after recaptured and found dead - set the last day 1 otherwise 0
+id11 <- id11 %>% mutate(infection = ifelse(time < "2018-09-21 00:00:00", 0, 1))
+id18 <- id18 %>% mutate(infection = ifelse(time < "2018-09-09 00:00:00", 0, 1))
+id36 <- id36 %>% mutate(infection = ifelse(time < "2018-09-16 00:00:00", 0, 1))
+
+# id 22 were recaptures while alive and tested positive - set those time as 1 before that 0
+id22 <- id22 %>% mutate(infection = ifelse(time < "2018-09-22 00:00:00", 0, 1))
+
+# rbind the data
+inf_df <- rbind(id11, id18, id22, id36)
+inf_df
+
+# rbind the entire dataset
+whole_df <- rbind(non_inf_df, inf_df)
+whole_df
+
+# save the whole dataset
+#readr::write_rds(whole_df, path = here("data/HMM_SSF", "HMM_prep_data.Rdata"))
+```
+
+# Footer
+```{r footer}
+sessionInfo()
+```

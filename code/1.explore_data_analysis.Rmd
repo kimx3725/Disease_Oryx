@@ -1,0 +1,170 @@
+---
+title: "1.explore_data_analysis"
+author: "Dennis Kim"
+date: "2022-09-21"
+output: html_document
+---
+
+# Objective 
+
+To explore the structure of the oryx data set. To do this, I will: 
+
+1. Determine appropriate id and tracking information in the data. 
+2. Merge the ID and tracking data into a single dataset. 
+
+## Document Preamble 
+```{r preamble}
+# load libraries
+library(knitr)
+library(dplyr)
+library(readr)
+library(data.table)
+library(DT)
+library(here)
+library(stringr)
+library(tidyr)
+library(purrr)
+options(width = 150)
+
+# set knitr options 
+opts_chunk$set(fig.width = 6, fig.height = 5, comment = NA)
+```
+
+## Tracking data 
+
+Read in the gps data 
+```{r read gps data}
+# Location data of the oryx 
+oryx.gps <- read.csv(here::here("data", "oryx_locs_09202022.csv"))
+
+# summary of the location data 
+summary(oryx.gps)
+
+# number of oryx = 240
+n_distinct(oryx.gps$collar_ID)
+
+head(oryx.gps)
+```
+
+Check if there are no missing gps points or timestamps
+```{r gps missing cases}
+# select 3 columns and return a logical vector indiciating which cases are completed called "comp"
+comp <- complete.cases(oryx.gps[, c("utm_e", "utm_n", "date")])
+
+# see the completed cases as a table 
+table(comp)
+```
+There aren't any missing points in the tracking datasets. 
+
+Check for other missing data 
+```{r other missing data}
+# check missing values in the rest of the gps dataset
+as.matrix(apply(is.na(oryx.gps), 2, sum)) %>% DT::datatable(colnames = 'NAs')
+```
+Some missing values are in columns: dist, dt, dx, dy, rel.angle
+
+### Data filtering 
+
+Remove uncessary columns 
+```{r remove columns}
+# filter data 
+oryx.gps.df <- oryx.gps %>% dplyr::select("collar_ID", "utm_e", "utm_n", "date", "long", "lat", "DOP", "temp_c")
+
+# check the filtered data
+summary(oryx.gps.df)
+```
+
+## ID data 
+
+Read in the id data 
+```{r read id data}
+# ID data of the oryx 
+oryx.id <- read.csv(here::here("data", "sho_master_info_09012022.csv"))
+
+# summary of the location data 
+summary(oryx.id)
+```
+
+Observations with one or more missing values 
+```{r missing id}
+# check missing values in the id dataset
+as.matrix(apply(is.na(oryx.id), 2, sum)) %>% DT::datatable(colnames = 'NAs')
+```
+Most of the columns of the data have NAs and further data inspection would be nice to figure out which columns might be useful for merging to the tracking data. 
+
+```{r filter id data}
+# drop the na in the collar_ID  
+oryx.id.df <- oryx.id %>% drop_na(collar_ID)
+
+# select only useful columns of the data 
+oryx.id.df <- oryx.id.df %>% dplyr::select(masterID, Rgroup, collar_ID, prev_collar_ID,date_collared, sex, DOB, date_arrived, date_released, age_at_release, birth_type, dam_masterID, dam_Rgroup, act_dropoff, fate, mort_detected, est_DOD, collar_malfunction, age_at_death, cause_of_death)
+
+# convert NAs to "alive" from the cause of death column
+oryx.id.df$cause_of_death[is.na(oryx.id.df$cause_of_death)] <- "alive"
+# convert NAs to "NONE" from the prev_collar_ID column
+oryx.id.df$prev_collar_ID[is.na(oryx.id.df$prev_collar_ID)] <- "NONE"
+
+summary(oryx.id.df)
+
+# extract the unique values per each ID group 
+oryx.filter.id <-  oryx.id.df %>%
+  group_by(masterID, collar_ID) %>%
+  nest(.) %>%
+  mutate(
+    Rgroup = purrr::map(data, ~dplyr::select(., Rgroup) %>% distinct),
+    DOB = purrr::map(data, ~ dplyr::select(., DOB) %>% distinct),
+    birth_type = purrr::map(data, ~ dplyr::select(., birth_type) %>% distinct),
+    sex = purrr::map(data, ~ dplyr::select(., sex) %>% distinct),
+    fate = purrr::map(data, ~ dplyr::select(., fate) %>% distinct),
+    prev_collar_ID = purrr::map(data, ~ dplyr::select(., prev_collar_ID) %>% distinct),
+    date_collared = purrr::map(data, ~ dplyr::select(., date_collared) %>% distinct),
+    date_released = purrr::map(data, ~ dplyr::select(., date_released) %>% distinct),
+    age_at_release = purrr::map(data, ~ dplyr::select(., age_at_release) %>% distinct),
+    death = purrr::map(data, ~ dplyr::select(., cause_of_death) %>% distinct),
+    age_death = purrr::map(data, ~ dplyr::select(., age_at_death) %>% distinct),
+    est_DOD = purrr::map(data, ~ dplyr::select(., est_DOD) %>% distinct)
+  ) %>%
+  unnest(
+    Rgroup,
+    birth_type ,
+    DOB,
+    sex,
+    fate,
+    prev_collar_ID,
+    date_collared,
+    date_released,
+    age_at_release,
+    death,
+    age_death,
+    est_DOD
+  ) %>% dplyr::select(-data)
+
+head(oryx.filter.id)
+```
+
+## Data merge 
+
+Merge the tracking data with the filtered ID data 
+```{r merge the data}
+nrow(oryx.gps.df) #1373185
+
+# merge the two filtered datasets
+oryx.merge <- oryx.gps.df %>% left_join(oryx.filter.id, by = "collar_ID")
+
+nrow(oryx.merge) #1373185
+
+# data structure 
+summary(oryx.merge)
+
+oryx.merge
+```
+
+Save out files.
+```{r save the merged data}
+#write_csv(oryx.merge, path=here("data/oryx_gps_id.csv"))
+```
+
+## Footer
+```{r footer}
+sessionInfo()
+```
