@@ -1,0 +1,184 @@
+---
+title: "5.fit_HMM"
+author: "Dennis Kim"
+date: "2024-01-03"
+output: html_document
+---
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(dplyr)
+library(readr)
+library(data.table)
+library(here)
+library(stringr)
+library(tidyr)
+library(purrr)
+library(lubridate)
+library(scales)
+
+# call environmental data
+library(terra)
+
+# analysis
+library(momentuHMM)
+library(adehabitatLT)
+
+# visualization 
+library(ggplot2)
+
+options(width = 150)
+```
+
+## 1.1. Format of tracking data
+
+Read in the prep data
+```{r read in prep data}
+# Location data of the oryx S
+whole_df <- readr::read_rds(here::here("data/HMM_SSF", "HMM_prep_data.Rdata"))
+
+# convert the shrub cover values to percentage 
+whole_df <- whole_df %>% mutate(per_shrub = (shrub/sum(shrub))*100)
+
+# create julian date 
+#whole_df <- whole_df %>% mutate(j_d = yday(time),
+#                    h = hour(time))
+
+#whole_df <- whole_df %>% mutate(julian = paste(j_d, h, sep="."))
+#whole_df$julian <- as.numeric(whole_df$julian)
+
+# time spent since left non-infected status 
+#hours <- NULL
+
+#for(id in unique(whole_df$ID)){
+  #nbSub0bs <- length(which(whole_df$ID == id))
+  
+  # approx in months for interval = 1 hour
+  #hours <- c(hours, (1:nbSub0bs)/24)
+#}
+
+# add the column "hours"
+#whole_df$hours <- hours
+
+# create bern body condition index - if optimal or over = 0, else under = 1
+whole_df <- whole_df %>% mutate(BC = ifelse(c_avg_BC == "under", 1, 0))
+
+# data summary
+whole_df %>% summary
+```
+
+prepare data for HMM format
+```{r HMM formats}
+# prepare data for HMM (comput step lengths and turning angles)
+data_hmm1 <- momentuHMM::prepData(whole_df, type = "UTM", covNames = c("per_shrub", "BC", "infection"))
+
+# check the hmm dataset
+head(data_hmm1, 10)
+```
+
+# model fitting - a 2-state HMM
+
+Choose some hypothesised mean step length for each state by looking at the empirical distribution. 
+```{r paramter values}
+# look at the step lengths distribution
+ggplot(data_hmm1, aes(x = step))+
+  geom_histogram(col = "white", fill = "grey", bins = 20)+
+  facet_wrap(~infection, scales = "free")
+
+# look at the shrub distribution
+ggplot(data_hmm1, aes(x = per_shrub))+
+  geom_histogram(col = "white", fill = "grey", bins = 20)+
+  scale_x_continuous(breaks = seq(0, 1, by = 1))
+
+# look at the infection distribution
+ggplot(data_hmm1, aes(x = infection))+
+  geom_histogram(col = "white", fill = "grey", bins = 2)
+
+# look at the body condition distribution
+ggplot(data_hmm1, aes(x = BC))+
+  geom_histogram(col = "white", fill = "grey", bins = 2)
+```
+
+state 1: non-infected (0) 
+state 2: infected (1)
+```{r parameter values}
+### Set up model
+
+# number of states 
+nbStates <- 2
+
+# label states
+stateNames <- c("NoInfected", "Infected")
+
+# Observation distributions (step lengths, turning angles, shrub)
+dist <- list(step = "gamma", angle = "vm", per_shrub = "beta", BC = "bern")
+
+# constrain transition probabilities - fix the transition probability matrix to prevent some of the transitions (e.g., from infected to non-infected). - we set to NA the columns of unconstrained transition probabilities, and we again fix the intercept of the other columns to a large negative number (here -100) to set the corresponding transition probabilities to be virtually zero (i.e., impossible transition).
+fixbeta <- matrix(c(NA, -100),
+                  nrow = 1,
+                  byrow = TRUE)
+
+fixbeta
+
+# fix initial values 
+fixPar <- list(beta = fixbeta)
+fixPar
+
+# known states - fix the initial state to "Non-infected" (state 1)
+knownStates <- rep(NA, length(whole_df$infection))
+knownStates[whole_df$infection==0] <- 1
+
+# Initial parameters
+# (step mean for state 1, step mean for state 2, step SD s1, step SD s2) and (angle concentration s1, angle concentration s2)
+Par0_2s <- list(step = c(1000, 250, 1000, 250), 
+                angle = c(3, 0.1),
+                per_shrub = c(0.1, 0.86, 3, 0.9),
+                BC = c(0.1, 0.9))
+
+# formula for transition probabilities 
+#formula <- ~ per_shrub+ BC
+
+# Fit a 3-state HMM
+hmm <- momentuHMM::fitHMM(data_hmm1, 
+                           nbStates = nbStates, 
+                           dist = dist, 
+                           Par0 = Par0_2s,
+                           knownStates = knownStates,
+                           fixPar = fixPar,
+                           stateNames = stateNames)
+
+```
+
+model visualization - hmm1
+```{r hmm model output}
+# Print parameter estimates
+hmm
+
+# save the whole dataset
+#readr::write_rds(hmm, path = here("data/HMM_SSF", "HMM_outpu.Rdata"))
+```
+
+```{r hmm visualization}
+# Plot estimated distributions and state-coloured tracks
+plot(hmm, breaks = 25, ask = FALSE)
+```
+
+save the plots as a pdf
+```{r example, echo=FALSE, results='hide'}
+pdf("HMM_Oryx.pdf")
+plot(hmm, breaks = 25, ask=FALSE)
+dev.off()
+```
+
+take out the estimates from the fitted model HMM 
+```{r model outputs}
+hmm
+```
+
+
+# Footer
+```{r footer}
+sessionInfo()
+```
