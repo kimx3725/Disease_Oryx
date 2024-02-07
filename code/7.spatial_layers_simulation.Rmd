@@ -1,0 +1,75 @@
+---
+title: "7.spatial layers simulation"
+author: "Dennis Kim"
+date: "2024-01-22"
+output: html_document
+---
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(dplyr)
+library(readr)
+library(data.table)
+library(here)
+library(stringr)
+library(tidyr)
+library(purrr)
+library(lubridate)
+library(scales)
+library(conflicted)
+
+# call environmental data
+library(terra)
+
+# analysis
+library(momentuHMM)
+library(adehabitatLT)
+
+# visualization 
+library(ggplot2)
+
+options(width = 150)
+
+conflict_prefer("select", "dplyr")
+conflict_prefer("filter", "dplyr")
+```
+
+# observed layer 
+```{r observed layer}
+# observed shrub cover
+shrub <- terra::rast("E:/Oryx/data/env_data/shrub/final.shrub.tif")
+shrub
+plot(shrub)
+```
+
+```{r simulated cover}
+# aggregate the layer to create a new SpatRaster with a lower resolution - aggregate by 100 cells
+sim_shrub <- terra::aggregate(shrub, fact = 100)
+
+# change the values of the shrub layer multiplied by 4 to increase their values 
+values(sim_shrub) <- values(sim_shrub)*4 
+
+sim_shrub
+
+plot(sim_shrub)
+
+# save the raster layer 
+#writeRaster(sim_shrub, filename = "sim_shrub.tif")
+```
+
+# shrub layers
+```{r shrub layer}
+# observed shrub cover
+shrub <- terra::rast("E:/Oryx/data/env_data/shrub/final.shrub.tif")
+plot(shrub)
+
+sim_shrub <- terra::rast("E:/Oryx/data/env_data/shrub/sim_shrub.tif")
+plot(sim_shrub)
+```
+
+# Footer
+```{r footer}
+sessionInfo()
+```
