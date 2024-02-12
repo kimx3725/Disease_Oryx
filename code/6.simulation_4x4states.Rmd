@@ -1,0 +1,388 @@
+---
+title: "8.simulations_observed"
+author: "Dennis Kim"
+date: "2024-01-30"
+output: html_document
+---
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(readr)
+library(data.table)
+library(here)
+library(purrr)
+library(lubridate)
+library(scales)
+library(conflicted)
+library(tidyverse)
+library(scico)
+library(patchwork)
+library(tictoc)
+
+# call environmental data
+library(terra)
+library(sf)
+
+# analysis
+library(amt)
+library(MASS)
+library(statip)
+
+# visualization 
+library(ggplot2)
+library(tidyterra)
+
+options(width = 150)
+
+conflict_prefer("select", "dplyr")
+conflict_prefer("filter", "dplyr")
+conflicts_prefer(lubridate::hour)
+conflicts_prefer(terra::plot)
+conflicts_prefer(dplyr::lag)
+```
+
+# shrub layers
+```{r shrub layer}
+# observed shrub cover
+shrub <- terra::rast("D:/Oryx/data/env_data/shrub/cropped_shrub.tif")
+
+plot(shrub)
+```
+
+# simulating tracks using the amt functions 
+
+1. specifying paamters governing the movements for the individual using the *make_issf_model()** function 
+2. specifying a redistribution kernel for generating movements based on an initial location and bearing 
+3. generating paths from the simulated redistribution kernel specified for a user-provided number of steps 
+
+First call the real dataset to see the reasonable initial values for parameter values per group
+```{r observed dataset}
+#n_oryx <- read_rds(here::here("data/ssf_data", "n_ssf_oryx.rds"))
+#u_oryx <- read_rds(here::here("data/ssf_data", "u_ssf_oryx.rds"))
+#i_oryx <- read_rds(here::here("data/ssf_data", "i_ssf_oryx.rds"))
+
+#unique(n_oryx$ID) %>% length() # 19 individuals
+#unique(u_oryx$ID) %>% length() # 25 individuals
+#unique(i_oryx$ID) %>% length() # 4 individuals
+```
+
+fit distribution to the dataset per infection and non-infection status and get the tentative movement paramters for the simulation.
+```{r tentative params}
+# tentative paramters for non infected individuals 
+
+# non-infected individuals
+#sl_dist_ninf <- fit_distr(n_oryx$sl_, "gamma") # step length
+#ta_dist_ninf <- fit_distr(n_oryx$ta_, "vonmises") # turn angle
+
+# infected individuals
+#sl_dist_inf <- fit_distr(i_oryx$sl_, "gamma") # step length
+#ta_dist_inf <- fit_distr(i_oryx$ta_, "vonmises") # turn angle
+```
+
+visualize the movement parameter distribution per each state
+```{r vis movement params}
+# gamma distribution
+
+## data for plotting
+plot_sl <- data.frame(x = rep(NA, 100))
+
+## x-axis is sequence of possible step lengths
+plot_sl$x <- seq(from = 0, to = 2500, length.out = 100)
+
+# y-axis is the prob density under the given gamma distribution 
+
+## non-infected resting 
+plot_sl$ni_r <- dgamma(
+  x = plot_sl$x,
+  shape = 0.3,
+  scale = 600
+)
+
+# noninfected exploratory
+plot_sl$ni_e <- dgamma(
+  x = plot_sl$x,
+  shape = 0.7,
+  scale = 1100
+)
+
+# infected exploratory
+plot_sl$i_e <- dgamma(
+  x = plot_sl$x,
+  shape = 0.5,
+  scale = 900
+)
+
+# infected resting
+plot_sl$i_r <- dgamma(
+  x = plot_sl$x,
+  shape = 0.1,
+  scale = 800
+)
+
+# pivot from wide data to long data
+plot_sl <- plot_sl %>% pivot_longer(cols = -x)
+plot_sl
+
+
+# plot 
+ggplot(plot_sl, aes(x = x, y = value, color = factor(name)))+
+  geom_line(size = 1)+
+  xlab("Step Length (m)")+
+  ylab("Probability Density")+
+  scale_color_manual(name = "Distribution",
+                     breaks = c("ni_r", "ni_e", "i_r", "i_e"),
+                     values = c("blue", "orange", "red", "darkgreen"))+
+  theme_bw()
+```
+
+prep for the simulation 
+```{r prep for the simulation}
+# covariance matrix for the movement parameters 
+sig <- matrix(c(0.4, 0.15, 0.15, 0.15, 0.3, 0.15, 0.15, 0.15, 0.4), ncol = 3, byrow = TRUE)
+
+# parameter values
+param.value_n <- data.frame(id = NA, shape = NA, scale = NA, kappa = NA) # non_infected 
+param.value_i <- data.frame(id = NA, shape = NA, scale = NA, kappa = NA) # infected
+
+# number of individual
+n_ind <- 1 
+
+# Initial start point
+start <- make_start(c(runif(1, 300000, 360000), runif(1, 1600000, 1700000)), ta_ = 0)
+
+# number of total steps to generate
+total_days <- 15
+```
+
+
+## transitional matrix - infection x behavioral states 
+
+prep for the recursive Markov chain manner for getting the infection & behavioral status (each is per day) and 24 steps per day since it is resampled by hourly. 
+```{r tmp status generator}
+# Modify the code to use a 4x4 transitional probability matrix and track 4 different states daily.
+
+# Define the transitional probability matrix for infection
+trans_m <- matrix(c(
+  0.7, 0.3, 0, 0,
+  0.12, 0.48, 0, 0.4,
+  0, 0, 0.2, 0.8,
+  0, 0, 0.1, 0.9
+), nrow = 4, ncol = 4, byrow = TRUE)
+
+# Function: ReMC
+# Description: This function represents a recursive representation of a Markov chain.
+# Parameters:
+#   - v: vector representing the initial state of the Markov chain
+#   - n: integer representing the number of steps in the Markov chain
+# Returns:
+#   - A vector representing the state of the Markov chain after n steps
+
+ReMC <- function(v, n) {
+  # Base case: if n equals 1, return the initial state v
+  if (n == 1) return(v)
+  
+  # Recursive step: compute the state of the Markov chain after n - 1 steps
+  p <- ReMC(v, n - 1)
+  
+  # Extract the last element of the computed state vector
+  u <- tail(p, 1)
+  
+  # Select the next state based on the transition matrix trans_m
+  # Sample from a vector of states with probabilities determined by the transition matrix
+  next_state <- sample(1:4, 1, prob = trans_m[u, ])
+  
+  # Concatenate the computed state vector with the next state
+  # This represents the state of the Markov chain after n steps
+  c(p, next_state)
+}
+
+# Define the initial state value - starting from the non-infected explore phase  
+x0 <- c(state = 1)  # Assuming the initial state is 1 (non-infected explore)
+
+# Apply the ReMC function to the list of vectors representing the initial parameter values
+state_info <- sapply(x0, ReMC, total_days)
+
+# Display the state information
+print(state_info)
+```
+
+
+## simulate the paths
+
+The provided code simulates the path of an individual with specified conditions and annotations. It incorporates a transitional probability matrix (tpm) to determine changes in infection status during each step of the simulation. Depending on the current infection status of the individual, the code selects the appropriate probability from the matrix to determine the next state. The simulation iterates through each step, updating the infection status accordingly and simulating the path based on the redistribution kernel.
+```{r simulation}
+# Create empty lists to store results
+ssf_sim <- vector("list", length = total_days)
+
+# Looping for transitions between states
+for (ind in 1:n_ind) {
+  
+  # Model per group
+  
+  ## model 1 - non-infected & exploratory
+  m_ne <- make_issf_model(coefs = c("final.shrub_end" = 0.005, 
+                                    "sl_" = 0, 
+                                    "log(sl_)" = 0, 
+                                    "cos(ta_)" = 0, 
+                                    "sl_:final.shrub_start" = 0.005, 
+                                    "log(sl_):final.shrub_start" = 0.005, 
+                                    "cos(ta_):final.shrub_start" = 0.005),
+                          sl = make_gamma_distr(shape = 0.7,
+                                                scale = 1100),
+                          ta = make_vonmises_distr(kappa = 0.2))
+  
+  ## model 2 - non infected & resting
+  m_nr <- make_issf_model(coefs = c("final.shrub_end" = 0.01, 
+                                    "sl_" = 0, 
+                                    "log(sl_)" = 0, 
+                                    "cos(ta_)" = 0, 
+                                    "sl_:final.shrub_start" = 0.01, 
+                                    "log(sl_):final.shrub_start" = 0.01, 
+                                    "cos(ta_):final.shrub_start" = 0.01),
+                          sl = make_gamma_distr(shape = 0.3,
+                                                scale = 600),
+                          ta = make_vonmises_distr(kappa = 0.15))
+  
+  ## model 3 - infected & exploratory
+  m_ie <- make_issf_model(coefs = c("final.shrub_end" = 0.002, 
+                                    "sl_" = 0, 
+                                    "log(sl_)" = 0, 
+                                    "cos(ta_)" = 0, 
+                                    "sl_:final.shrub_start" = 0.002, 
+                                    "log(sl_):final.shrub_start" = 0.002, 
+                                    "cos(ta_):final.shrub_start" = 0.002),
+                          sl = make_gamma_distr(shape = 0.1,
+                                                scale = 800),
+                          ta = make_vonmises_distr(kappa = 0.25))
+  
+  ## model 4 - infected & resting
+  m_ir <- make_issf_model(coefs = c("final.shrub_end" = 0.03, 
+                                    "sl_" = 0, 
+                                    "log(sl_)" = 0, 
+                                    "cos(ta_)" = 0, 
+                                    "sl_:final.shrub_start" = 0.03, 
+                                    "log(sl_):final.shrub_start" = 0.03, 
+                                    "cos(ta_):final.shrub_start" = 0.03),
+                          sl = make_gamma_distr(shape = 0.5,
+                                                scale = 900),
+                          ta = make_vonmises_distr(kappa = 0.1))
+
+  # Redistribution kernel per group
+  
+  ## redistribution kernel - non-infected explore
+  rdk_ne <- redistribution_kernel(m_ne, 
+                                  start = start, 
+                                  map = shrub, 
+                                  landscape = "continuous", 
+                                  tolerance = 0.02)
+  
+  ## redistribution kernel - non-infected resting
+  rdk_nr <- redistribution_kernel(m_nr, 
+                                  start = start, 
+                                  map = shrub, 
+                                  landscape = "continuous", 
+                                  tolerance = 0.02)
+  
+  ## redistribution kernel - infected exploratory
+  rdk_ie <- redistribution_kernel(m_ie, 
+                                  start = start, 
+                                  map = shrub, 
+                                  landscape = "continuous", 
+                                  tolerance = 0.02)
+  
+  ## redistribution kernel - infected resting
+  rdk_ir <- redistribution_kernel(m_ir, 
+                                  start = start, 
+                                  map = shrub, 
+                                  landscape = "continuous", 
+                                  tolerance = 0.02)
+
+  # Initialize the start position
+  start_position <- start
+  
+  # Loop for each step
+  for (i in 1:total_days) {
+    # get the infection status of each day 
+    state <- state_info[i]
+  
+    # IF the daily state is noninfected & explore (1), then generate 24 steps by using rdk_n for 1 step-ahead projections
+    if (state == 1) {
+      ssf_sim[[i]] <- data.frame(id = ind, 
+                                 state = state,
+                                 positions = list(simulate_path(rdk_ne, n.steps = 24, custom_start = start_position)))
+    } else {
+      # IF the daily state is noninfected & resting (2), then generate 24 steps by using rdk_i for 1 step-ahead projections
+      if (state == 2) {
+        ssf_sim[[i]] <- data.frame(id = ind, 
+                                    state = state,
+                                    positions = list(simulate_path(rdk_nr, n.steps = 24, custom_start = start_position)))
+      } else {
+        # IF the daily state is infected & explore (3), then generate 24 steps by using rdk_r for 1 step-ahead projections
+        if (state == 3) {
+          ssf_sim[[i]] <- data.frame(id = ind, 
+                                     state = state,
+                                     positions = list(simulate_path(rdk_ie, n.steps = 24, custom_start = start_position)))
+        } else {
+          # IF the daily state is infected & resting (4), then generate 24 steps by using rdk_e for 1 step-ahead projections
+          if (state == 4) {
+            ssf_sim[[i]] <- data.frame(id = ind, 
+                                       state = state,
+                                       positions = list(simulate_path(rdk_ir, n.steps = 24, custom_start = start_position)))
+          }
+        }
+      }
+    }
+    # Update the start position for the next iteration
+    start_position <- tail(ssf_sim[[i]]$positions, 1)$position
+  }
+}
+
+# Combine results into one data frame
+ssf_df <- do.call(rbind, ssf_sim)
+ssf_df <- ssf_df[!duplicated(ssf_df$positions.x_, ssf_df$positions.y_),]
+
+#positions.t <- seq(as.POSIXct("2024-02-05 20:27:26"), as.POSIXct("2024-02-26 16:27:26"), by="hour")
+#ssf_df$positions.t_ <- positions.t
+
+#ssf_df <- ssf_df %>% mutate(postions.t_ = row_number())
+ssf_df
+
+# save the data
+#saveRDS(ssf_df, "ssf_sim_trial_15days.rds")
+```
+
+# Visualizations
+
+visualization of the tracks:
+```{r trk visualization}
+# prep for sff_df
+ssf_df$state <- as.factor(ssf_df$state)
+
+# change the labels
+state_names <- c('1' = "NE", '2' = "NR", '3' = "IE", '4' = "IR")
+
+ggplot()+
+  geom_point(data = ssf_df, aes(positions.x_, positions.y_))+
+  facet_wrap(~state, 
+             nrow = 1,
+             labeller = labeller(state = state_names))
+
+
+# visualize the movement paths across behaviors
+ggplot()+
+  geom_spatraster(data = shrub, show.legend = FALSE)+
+  geom_point(data = ssf_df, aes(positions.x_, positions.y_), size = 0.7)+
+  labs(title = "Oryx simulation with 4 different states")+
+  facet_wrap(~state,
+             labeller = labeller(state = state_names),
+             nrow = 1)+
+  scale_fill_terrain_c()+
+  theme_bw()
+```
+
+# Footer
+```{r footer}
+sessionInfo()
+```
