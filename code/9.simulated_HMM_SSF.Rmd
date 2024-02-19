@@ -1,0 +1,252 @@
+---
+title: "6.HMM_SSF"
+author: "Dennis Kim"
+date: "2023-12-05"
+output: html_document
+---
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(dplyr)
+library(readr)
+library(data.table)
+library(here)
+library(stringr)
+library(tidyr)
+library(purrr)
+library(lubridate)
+
+# call environmental data
+library(terra)
+
+# analysis
+library(hmmSSF)
+
+# visualization 
+library(ggplot2)
+
+options(width = 150)
+
+# set knitr options 
+opts_chunk$set(fig.width = 6, fig.height = 5, comment = NA)
+```
+
+# 1. Data preparation
+
+## 1.1. Format of tracking data
+
+Read in the simulated data
+```{r read in data}
+# Location data of the oryx S
+sim_df <- readr::read_rds(here::here("data/finalized_data", "ssf_sim_trial_15days_same_Rdist.rds"))
+
+# create time wiht intervals of 1 hour
+sim_df$positions.t_ <- seq(as.POSIXct("2022-02-01"), as.POSIXct("2022-02-16"), by = "hour")
+
+# change the column names 
+colnames(sim_df) <- c("ID", "state", "x", "y", "time", "dt")
+
+# data summary
+summary(sim_df)
+```
+
+resample the datasets
+```{r control steps}
+# resampled the dataset
+oryx.prep <- hmmSSF::get_controls(obs = sim_df, n_controls = 50, distr = "gamma")
+#oryx.prep
+
+# left joined the state from the original simulated data
+state_id <- sim_df %>% dplyr::select(state, time)
+#state_id
+
+oryx.prep <- oryx.prep %>% left_join(state_id, by = c("time"))
+summary(oryx.prep)
+```
+
+# 1.3. extracting spatial covariates
+
+must stored as a SpatRaster 
+```{r shrub cover}
+# call shrub cover
+shrub <- terra::rast("D:/Oryx/data/env_data/shrub/cropped_shrub.tif")
+#shrub
+
+# extract shrub values from the ratser
+shrub <- terra::extract(shrub, oryx.prep[, c("x", "y")]) 
+oryx.prep$shrub <- shrub[, -1]
+
+# create a dataframe
+data <- oryx.prep
+data
+```
+
+# 2. Model specification and model fitting 
+
+## 2.1. model formulation 
+
+we will be using two-states HMM models: infected and non-infected status 
+```{r model format}
+# number of HMM states 
+n_states <- 4 
+
+# SSF formula 
+ssf_formula <- ~ step + log(step) + cos(angle) + shrub
+```
+
+## 2.2. Starting paramter values 
+
+Choose some hypothesised mean step length for each state by looking at the empirical distribution. 
+```{r paramter values}
+# look at the step lengths distribution
+ggplot(subset(data, obs == 1), aes(x = step))+
+  geom_histogram(col = "white", fill = "grey", bins = 20)
+
+# look at the shrub distribution
+ggplot(subset(data, obs == 1), aes(x = shrub))+
+  geom_histogram(col = "white", fill = "grey", bins = 20)+
+  scale_x_continuous(breaks = seq(0, 20, by = 1))
+```
+
+calculate the average shrub values per state 
+```{r average shrub}
+avg_shrub <- data %>% drop_na(shrub) %>%  group_by(state) %>% summarise_at(vars(shrub), list(mean_shrub = mean))
+
+avg_shrub
+```
+
+
+**movement parameters per state**
+
+state 1: NE - SL = 1,0000m, TA = 0.2
+state 2: NR - SL = 6,000m, TA = 0.15
+state 3: IE - SL = 7,000m, TA = 0.25
+state 4: IR - SL = 2,000m, TA = 0.1
+```{r parameter values}
+# step lengths mean between two states 
+
+# state 1 NE
+sl1 <- -(10000/(10000)^2)
+log_sl1 <- ((10000)^2/(10000)^2)-2
+cos_ta1 <- 0.2
+shrub1 <- avg_shrub$mean_shrub[1]
+
+## state 2 NR
+sl2 <- -(6000/(6000)^2)
+log_sl2 <- ((6000)^2/(6000)^2)-2
+cos_ta2 <- 0.15
+shrub2 <- avg_shrub$mean_shrub[2]
+
+## state 3 IE
+sl3 <- -(7000/(7000)^2)
+log_sl3 <- ((7000)^2/(7000)^2)-2
+cos_ta3 <- 0.25
+shrub3 <- avg_shrub$mean_shrub[3]
+
+## state 4 IR
+sl4 <- -(2000/(2000)^2)
+log_sl4 <- ((2000)^2/(2000)^2)-2
+cos_ta4 <- 0.1
+shrub4 <- avg_shrub$mean_shrub[4]
+```
+Here, we use the fact that the selection parameters for **step** and **log(step)** are linked to the mean $\mu_L$ and standard deviation $\delta_L$ of a gamma distribution through the relationships:
+$\beta_L = {-\mu_L \over \delta^2_L}$
+$\beta_log(L) = {\mu^2_L \over \delta^2_L} - 2 $
+
+set the initial values for SSF parameters 
+```{r initial SSF param values}
+# n column order = NE, NR, IE, IR 
+ssf_par0 <- matrix(c(
+  sl1, sl2, sl3, sl4,
+  log_sl1, log_sl2, log_sl3, log_sl4,
+  cos_ta1, cos_ta2, cos_ta3, cos_ta4,
+  shrub1, shrub2, shrub3, shrub4),
+  ncol = 4, byrow = TRUE)
+
+ssf_par0
+```
+
+set the initial values for transition probabilities paramters 
+```{r initial tp param values}
+tpm_par0 <- matrix(c(0, -5, -5,
+                     0, -5, 0,
+                     -5, 0, 0,
+                     -5, 0, 0),
+                    nrow = 1,
+                    byrow = TRUE)
+
+tpm_par0
+```
+
+
+## 2.3. Model fitting 
+
+```{r model fits}
+# fit model 
+mod <- hmmSSF::hmmSSF(ssf_formula = ssf_formula,
+                      n_states = n_states,
+                      data = data,
+                      ssf_par0 = ssf_par0,
+                      tpm_par0 = tpm_par0)
+
+mod
+```
+
+# 3. Interpretation of results 
+```{r visualizatoin}
+# step length L 
+step_rss <- hmmSSF::plot_ssf(mod = mod, var = "step")
+step_rss
+
+# turn angle 
+angle_rss <- hmmSSF::plot_ssf(mod = mod, var = "angle")
+angle_rss
+
+# shrub 
+shrub_rss <- hmmSSF::plot_ssf(mod = mod, var = "shrub")
+shrub_rss
+```
+
+save the rss plots
+```{r rss downloads}
+ggsave(step_rss, filename = "step_rss.jpeg", width = 9, height = 6, dpi = 300, units = "in")
+ggsave(angle_rss, filename = "angle_rss.jpeg", width = 9, height = 6, dpi = 300, units = "in")
+ggsave(shrub_rss, filename = "shrub_rss.jpeg", width = 9, height = 6, dpi = 300, units = "in")
+```
+
+visualize the state sequence 
+```{r state sequence}
+# get most likely state sequence 
+states <- viterbi_decoding(mod = mod)
+length(states)
+
+# true locations
+true_locations <- subset(data, obs == 1)
+length(true_locations$x)
+
+# data frame for plotting (remove first two obs - not used in model)
+df <- data.frame(x = true_locations$x,
+                 y = true_locations$y,
+                 state = factor(states))
+
+# visualize the state switching trends
+state_map <- ggplot(df, aes(x, y, col = state, group = NA))+
+  geom_path()+
+  geom_point(size = 1)+
+  coord_equal()+
+  theme_bw()
+
+state_map
+```
+
+save the state map
+```{r state map downloads}
+ggsave(state_map, filename = "simulated_hmm_ssf_state_map.jpeg", width = 9, height = 6, dpi = 300, units = "in")
+```
+
+# Footer
+```{r footer}
+sessionInfo()
+```
