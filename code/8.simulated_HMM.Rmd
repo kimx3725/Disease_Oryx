@@ -1,0 +1,181 @@
+---
+title: "6.fit_HMM_oryx"
+author: "Dennis Kim"
+date: "2024-01-22"
+output: html_document
+---
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(dplyr)
+library(readr)
+library(data.table)
+library(here)
+library(stringr)
+library(tidyr)
+library(purrr)
+library(lubridate)
+library(scales)
+
+# call environmental data
+library(terra)
+
+# analysis
+library(momentuHMM)
+library(adehabitatLT)
+
+# visualization 
+library(ggplot2)
+
+options(width = 150)
+```
+
+## 1.1. Format of tracking data
+
+Read in the prep data
+```{r read in prep data}
+# Location data of the oryx S
+sim_df <- readr::read_rds(here::here("data/finalized_data", "ssf_sim_trial_15days_same_Rdist.rds"))
+
+# create time wiht intervals of 1 hour
+sim_df$positions.t_ <- seq(as.POSIXct("2022-02-01"), as.POSIXct("2022-02-16"), by = "hour")
+
+# change the column names 
+colnames(sim_df) <- c("ID", "state", "x", "y", "time", "dt")
+
+# data summary
+summary(sim_df)
+```
+
+prepare data for HMM format
+```{r HMM formats}
+# prepare data for HMM (comput step lengths and turning angles)
+data_hmm <- momentuHMM::prepData(sim_df, type = "UTM", covNames = "state")
+
+# check the hmm dataset
+head(data_hmm, 10)
+
+# non-infected exploring: mean of non infected step and turn angle
+data_hmm %>% filter(state == 1) %>% drop_na(.) %>% summarise(., step_mean = mean(step))
+data_hmm %>% filter(state == 1) %>% drop_na(.) %>% summarise(., ta_mean = mean(angle))
+
+# non-infected resting: mean of infected step and turn angle
+data_hmm %>% filter(state == 2) %>% drop_na(.) %>% summarise(., step_mean = mean(step))
+data_hmm %>% filter(state == 2) %>% drop_na(.) %>% summarise(., ta_mean = mean(angle))
+
+# infected exploring: mean of non infected step and turn angle
+data_hmm %>% filter(state == 3) %>% drop_na(.) %>% summarise(., step_mean = mean(step))
+data_hmm %>% filter(state == 3) %>% drop_na(.) %>% summarise(., ta_mean = mean(angle))
+
+# infected resting: mean of infected step and turn angle
+data_hmm %>% filter(state == 4) %>% drop_na(.) %>% summarise(., step_mean = mean(step))
+data_hmm %>% filter(state == 4) %>% drop_na(.) %>% summarise(., ta_mean = mean(angle))
+```
+
+# model fitting - a 2-state HMM
+
+Choose some hypothesised mean step length for each state by looking at the empirical distribution. 
+```{r paramter values}
+# look at the step lengths distribution
+ggplot(data_hmm, aes(x = step))+
+  geom_histogram(col = "white", fill = "grey", bins = 20)+
+  facet_wrap(~state, scales = "free")
+```
+
+```{r 4 dependent parameter values}
+### Set up model
+
+# number of states 
+nbStates <- 4
+
+# label states
+stateNames <- c('1' = "NE", '2' = "NR", '3' = "IE", '4' = "IR")
+
+# Observation distributions (step lengths, turning angles, shrub)
+dist <- list(step = "gamma", 
+             angle = "vm")
+
+# constrain transition probabilities - fix the transition probability matrix to prevent some of the transitions (e.g., from infected to non-infected). - we set to NA the columns of unconstrained transition probabilities, and we again fix the intercept of the other columns to a large negative number (here -100) to set the corresponding transition probabilities to be virtually zero (i.e., impossible transition).
+fixbeta <-  matrix(c(NA, -1e6, -1e6,
+                     NA, -1e6, NA,
+                     -1e6, -1e6, NA,
+                     -1e6, -1e6, NA), 
+                   nrow = 1, 
+                   byrow = TRUE)
+
+# fix initial values 
+fixPar <- list(beta = fixbeta)
+
+# Initial parameters
+# (step mean for state 1, step mean for state 2, step mean for state N so on... same for step SD s1, step SD s2) and (angle concentration s1, angle concentration s2)
+Par0_4s <- list(step = c(16000, 7500, 10000, 650,
+                         16000, 7500, 10000, 650), 
+                angle = c(0.5, 0.1, 0.25, 0.1)
+                )
+
+# Fit a 4-state HMM
+hmm <- momentuHMM::fitHMM(data_hmm, 
+                           nbStates = nbStates, 
+                           dist = dist, 
+                           Par0 = Par0_4s,
+                           fixPar = fixPar,
+                           stateNames = stateNames)
+```
+
+model visualization - hmm1
+```{r hmm model output}
+# Print parameter estimates
+hmm
+```
+
+```{r hmm visualization}
+# Plot estimated distributions and state-coloured tracks
+plot(hmm, breaks = 25, ask = FALSE)
+```
+
+save the plots as a pdf
+```{r example, echo=FALSE, results='hide'}
+pdf("simulated_HMM_Oryx.pdf")
+plot(hmm, breaks = 25, ask=FALSE)
+dev.off()
+```
+
+take out the estimates from the fitted model HMM 
+```{r model outputs}
+# bring out the reconstructed most probable states sequence 
+states <- momentuHMM::viterbi(hmm)
+
+# add states into hmm
+data_hmm1$states <- states
+
+# set up the state statue from the initial data
+data_hmm1$state <- whole_df$state
+```
+
+visualization to HMM state sequence over time 
+```{r state visualization}
+hmm_df <- as.data.frame(data_hmm1) # convert it to dataframe 
+hmm_df <- hmm_df %>% mutate(julian = yday(time),
+                            week = lubridate::week(time)) # create the week column
+hmm_df$states <- as.factor(states) # factorize the state
+hmm_df$ID <- as.numeric(hmm_df$ID) # convert the ID to numeric
+hmm_df <- hmm_df %>% arrange(desc(ID)) # rearrange the ID by desc order
+hmm_df_trends <- hmm_df %>% dplyr::select(ID, julian, week, states)
+
+# visualize the trends 
+ggplot(hmm_df_trends, aes(x = julian, y = as.factor(ID)))+
+       #geom_point(stat='identity', aes(col=states), size = 2)+
+       geom_line(stat = 'identity', aes(col=states), size = 1)+
+       scale_y_discrete("ID", 
+                        labels = as.character(hmm_df$ID), 
+                        breaks = hmm_df$ID, 
+                        expand = expansion(mult = c(0, .02),add = c(1, 0)))+
+       theme_bw()
+```
+
+# Footer
+```{r footer}
+sessionInfo()
+```
