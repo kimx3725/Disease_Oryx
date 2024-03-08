@@ -1,0 +1,242 @@
+---
+title: "6.fit_HMM_oryx"
+author: "Dennis Kim"
+date: "2024-01-22"
+output: html_document
+---
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(dplyr)
+library(readr)
+library(data.table)
+library(here)
+library(stringr)
+library(tidyr)
+library(purrr)
+library(lubridate)
+library(scales)
+
+# call environmental data
+library(terra)
+
+# analysis
+library(moveHMM)
+library(hmmTMB)
+library(adehabitatLT)
+
+# visualization 
+library(ggplot2)
+
+options(width = 150)
+```
+
+## 1.1. Format of tracking data
+
+Read in the prep data
+```{r read in prep data}
+# Location data of the oryx 
+whole_df <- readr::read_rds(here::here("data/HMM", "HMM_prep_data.Rdata"))
+
+# only select a few individuals for testing across groups 
+whole_df <- whole_df %>% filter(ID ==  c("11", "22", "5", "27", "12", "21"))
+
+# transform ID to factor for random effects
+whole_df$ID <- factor(whole_df$ID)
+
+# only select variables of interests 
+whole_df <- whole_df %>% dplyr::select(-c(shrub, c_avg_BC))
+
+# look at the data structure
+head(whole_df)
+```
+
+prepare data for HMM format
+```{r HMM formats}
+# prepare data for HMM (compute step lengths and turning angles)
+data_hmm <- momentuHMM::prepData(whole_df, type = "UTM")
+
+# factor the ID 
+data_hmm$ID <- factor(data_hmm$ID, levels = c("12", "21", "5", "27", "11", "22"))
+
+# recode the factor levels by name 
+levels(data_hmm$ID) <- list(n_12 = "12", n_21 = "21", u_5 ="5", u_27 = "27", i_11 = "11", i_22 = "22")
+
+# check the hmm dataset
+head(data_hmm, 10)
+```
+
+# model fitting - a 4-state HMM
+
+Choose some hypothesised mean step length for each state by looking at the empirical distribution. 
+```{r paramter values}
+# look at the step lengths distribution
+ggplot(data_hmm, aes(x = step))+
+  geom_histogram(col = "white", fill = "grey", bins = 20)+
+  facet_wrap(~infection, scales = "free")
+
+# look at the infection distribution
+ggplot(data_hmm, aes(x = infection))+
+  geom_histogram(col = "white", fill = "grey", bins = 2)
+```
+
+# infection movement parameters
+get the initial movement parameters 
+```{r movement params}
+# mean movement params
+data_hmm %>% 
+  group_by(infection) %>% 
+  dplyr::summarize(step_mean = mean(step, na.rm = TRUE),
+                   ta_mean = mean(angle, na.rm = TRUE))
+```
+
+# Observation model 
+```{r obs model}
+# Initial parameters
+# step mean for state 1, 2, 3, 4
+# turn angle for state 1, 2, 3, 4
+
+Par0_4s <- list(step = list(mean = c(690, 150, 300, 150), 
+                            sd = c(690, 150, 300, 150)),
+                angle = list(mu = c(0, 0, 0, 0), 
+                             kappa = c(0.03, 0.15, 0.05, 0.15))
+                )
+
+# Observation distributions (step lengths, turning angles)
+dist <- list(step = "gamma2", 
+             angle = "vm")
+
+# create Observation object 
+obs <- Observation$new(data = data_hmm,
+                       dists = dist,
+                       n_states = 4,
+                       par = Par0_4s)
+```
+
+# Hidden state model 
+
+create a matrix to specify the structure of the model, where each element is the formula for the corresponding transition probability. 
+```{r hidden state model}
+# Model formulas 
+f <- "~ s(ID, bs = 're')"
+
+# the diagnoal elements are used as reference for each row, so their formulas are set to ".". 
+tpm_structure <- matrix(c(".",    f, "~1", "~1",
+                            f,  ".", "~1",    f,
+                         "~1", "~1",  ".",    f,
+                         "~1", "~1",    f,  "."),
+                        nrow = 4,
+                        byrow = TRUE)
+
+
+# Initial transition probabilites
+#tpm0 <-  matrix(c(0.7, 0.3, 0, 0,
+#                  0.12, 0.48, 0, 0.4,
+#                  0, 0, 0.2, 0.8,
+#                  0, 0, 0.1, 0.9),
+#                nrow = 4, 
+#                byrow = TRUE)
+
+# create MarkovChain object - use the option initial_state = "stationary" to fix the initial distribution of the state process to the stationary distirbution for each time series. 
+hid <- MarkovChain$new(n_states = 4,
+                       formula = tpm_structure,
+                       data = data_hmm,
+                       initial_state = "stationary")
+```
+
+list fixed parameters 
+```{r fixed paramters}
+# list of fixed parameters 
+fixpar <- list(obs = c("angle.mu.state1.(Intercept)" = 0,
+                       "angle.mu.state2.(Intercept)" = 0,
+                       "angle.mu.state3.(Intercept)" = 0,
+                       "angle.mu.state4.(Intercept)" = 0),
+               hid = c("S1>S3.(Intercept)" = 0,
+                       "S1>S4.(Intercept)" = 0,
+                       "S2>S3.(Intercept)" = 0,
+                       "S3>S1.(Intercept)" = 0,
+                       "S3>S2.(Intercept)" = 0,
+                       "S4>S1.(Intercept)" = 0,
+                       "S4>S2.(Intercept)" = 0))
+
+# create HMM object 
+hmm <- HMM$new(obs = obs, hid = hid, fixpar = fixpar)
+```
+
+# fit the HMM model 
+```{r model fit}
+# Fit a 4-state HMM
+hmm$fit(silent = TRUE)
+```
+
+model visualization - hmm
+```{r hmm model output}
+hmm
+```
+
+# interpreting the state
+```{r hmm visualization}
+colours.states <- c("#238b45", "#88419d", "#d7301f", "#0570b0", "black")
+
+
+sl_dist <- hmm$plot_dist("step")+
+  scale_colour_manual(name = "States",
+                      values = c(colours.states),
+                      labels = c("NE", "NR", "IE", "IR", "total"))+
+  scale_fill_manual(name = "States",
+                    values=c(colours.states), 
+                    labels = c("NE", "NR", "IE", "IR", "total"))+
+  scale_linetype_manual(name = "States",
+                        values=c("solid","solid","solid", "solid","dashed"),
+                        labels = c("NE", "NR", "IE", "IR", "total"))+
+  coord_cartesian(ylim = c(0, 0.0016))+
+  theme(legend.position = c(0.85, 0.75))+
+  xlim(0, 5000)+
+  labs(x = "step (m)")
+
+hmm$plot_dist("angle")
+```
+
+plot track 
+```{r trk plot}
+hmm_sim <- hmm$plot_ts("x", "y")+
+  geom_point(size = 0.7, alpha = 0.5)+
+  scale_colour_manual(name = "States",
+                    values=c(colours.states), 
+                    labels = c("NE", "NR", "IE", "IR", "total"))+
+  scale_fill_manual(name = "States",
+                    values=c(colours.states), 
+                    labels = c("NE", "NR", "IE", "IR", "total"))+
+  coord_equal()+
+  facet_wrap(~ID)
+```
+
+
+# inter-individual heterogeneity 
+```{r inter}
+ind_delta <- hmm$plot(what = "delta", var = "ID")+
+  geom_point(size = 1)+
+  scale_colour_manual(name = "States",
+                    values=c(colours.states), 
+                    labels = c("NE", "NR", "IE", "IR", "total"))+
+  scale_fill_manual(name = "States",
+                    values=c(colours.states), 
+                    labels = c("NE", "NR", "IE", "IR", "total"))
+```
+
+
+save the plots as a pdf
+```{r example, echo=FALSE, results='hide'}
+pdf("real_hmmTMB_Oryx.pdf")
+sl_dist
+hmm_sim
+ind_delta
+dev.off()
+```
+
+# Footer
+```{r footer}
+sessionInfo()
+```
