@@ -1,0 +1,88 @@
+---
+title: "6.fit_HMM_oryx"
+author: "Dennis Kim"
+date: "2024-01-22"
+output: html_document
+---
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(dplyr)
+library(readr)
+library(data.table)
+library(here)
+library(stringr)
+library(tidyr)
+library(purrr)
+library(lubridate)
+library(scales)
+
+# call environmental data
+library(terra)
+
+# analysis
+library(adehabitatLT)
+
+# visualization 
+library(ggplot2)
+
+options(width = 150)
+```
+
+## 1.1. Format of tracking data
+
+Read in the prep data
+```{r read in prep data}
+# Location data of the oryx 
+whole_df <- readr::read_rds(here::here("data/hmm_visualization_data", "whole_hmm_sequence.rds"))
+ind_df <- readr::read_rds(here::here("data/hmm_visualization_data", "individual_whole_hmm_sequence.rds"))
+ran_df <- readr::read_rds(here::here("data/hmm_visualization_data", "whole_hmmTMB_sequence.rds"))
+
+# only select the columns that we will use 
+whole_df <- whole_df %>% dplyr::select("ID", "states", "x", "y")
+ind_df <- ind_df %>% dplyr::select("ID", "states", "x", "y")
+
+# change the col name to "state"
+names(whole_df)[2] <- "state"
+names(ind_df)[2] <- "state"
+
+# create group names 
+whole_df$group <- "pop_hmm"
+ind_df$group <- "ind_hmm"
+ran_df$group <- "hmmTMB"
+
+# bind two data 
+all_df <- rbind(whole_df, ind_df, ran_df)
+```
+
+visualize 
+```{r visualization}
+map_1 <- all_df %>% filter(ID %in% c(1, 2, 3, 4, 5, 6))
+
+map_1
+
+ggplot(map_1, mapping = aes(x, y, col = state, group = ID))+
+  geom_point(size = 0.7)+
+  geom_path()+
+  scale_color_manual(values = c("#238b45", "#88419d", "#d7301f", "#0570b0"),
+                     labels = c("NE", "NR", "IE", "IR"))+
+  coord_equal()+
+  facet_grid(ID~group)
+```
+
+
+save the plots as a pdf
+```{r example, echo=FALSE, results='hide'}
+pdf("real_hmmTMB_Oryx.pdf")
+sl_dist
+hmm_sim
+ind_delta
+dev.off()
+```
+
+# Footer
+```{r footer}
+sessionInfo()
+```
