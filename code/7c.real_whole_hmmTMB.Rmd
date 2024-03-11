@@ -25,7 +25,7 @@ library(terra)
 # analysis
 library(moveHMM)
 library(hmmTMB)
-library(adehabitatLT)
+library(momentuHMM)
 
 # visualization 
 library(ggplot2)
@@ -38,16 +38,9 @@ options(width = 150)
 Read in the prep data
 ```{r read in prep data}
 # Location data of the oryx 
-whole_df <- readr::read_rds(here::here("data/HMM", "HMM_prep_data.Rdata"))
+whole_df <- readr::read_rds(here::here("data/HMM", "final_v_hmm_prep_data.rds"))
 
-# transform ID to factor for random effects
-whole_df$ID <- factor(whole_df$ID)
-
-# only select variables of interests 
-whole_df <- whole_df %>% dplyr::select(-c(shrub, c_avg_BC))
-
-# look at the data structure
-head(whole_df)
+whole_df
 ```
 
 prepare data for HMM format
@@ -114,7 +107,7 @@ obs <- Observation$new(data = data_hmm,
 create a matrix to specify the structure of the model, where each element is the formula for the corresponding transition probability. 
 ```{r hidden state model}
 # Model formulas 
-f <- "~ s(ID, bs = 're')"
+f <- "~ID"
 
 # the diagnoal elements are used as reference for each row, so their formulas are set to ".". 
 tpm_structure <- matrix(c(".",    f, "~1", "~1",
@@ -126,21 +119,19 @@ tpm_structure <- matrix(c(".",    f, "~1", "~1",
 
 
 # Initial transition probabilites
-#tpm0 <-  matrix(c(0.7, 0.3, 0, 0,
-#                  0.12, 0.48, 0, 0.4,
-#                  0, 0, 0.2, 0.8,
-#                  0, 0, 0.1, 0.9),
-#                nrow = 4, 
-#                byrow = TRUE)
+tpm0 <-  matrix(c(0.7, 0.3, 0, 0,
+                  0.12, 0.48, 0, 0.4,
+                  0, 0, 0.2, 0.8,
+                  0, 0, 0.1, 0.9),
+                nrow = 4, 
+                byrow = TRUE)
 
 # create MarkovChain object - use the option initial_state = "stationary" to fix the initial distribution of the state process to the stationary distirbution for each time series. 
 hid <- MarkovChain$new(n_states = 4,
                        formula = tpm_structure,
-                       #tpm = tpm0,
+                       tpm = tpm0,
                        data = data_hmm,
                        initial_state = "stationary")
-
-hid
 ```
 
 list fixed parameters 
@@ -150,13 +141,13 @@ fixpar <- list(obs = c("angle.mu.state1.(Intercept)" = NA,
                        "angle.mu.state2.(Intercept)" = NA,
                        "angle.mu.state3.(Intercept)" = NA,
                        "angle.mu.state4.(Intercept)" = NA),
-               hid = c("S1>S3.(Intercept)" = 0,
-                       "S1>S4.(Intercept)" = 0,
-                       "S2>S3.(Intercept)" = 0,
-                       "S3>S1.(Intercept)" = 0,
-                       "S3>S2.(Intercept)" = 0,
-                       "S4>S1.(Intercept)" = 0,
-                       "S4>S2.(Intercept)" = 0))
+               hid = c("S1>S3.(Intercept)" = NA,
+                       "S1>S4.(Intercept)" = NA,
+                       "S2>S3.(Intercept)" = NA,
+                       "S3>S1.(Intercept)" = NA,
+                       "S3>S2.(Intercept)" = NA,
+                       "S4>S1.(Intercept)" = NA,
+                       "S4>S2.(Intercept)" = NA))
 
 # create HMM object 
 hmm <- HMM$new(obs = obs, hid = hid, fixpar = fixpar)
@@ -241,6 +232,8 @@ ind_delta <- hmm$plot(what = "delta", var = "ID")+
   scale_fill_manual(name = "States",
                     values=c(colours.states), 
                     labels = c("NE", "NR", "IE", "IR", "total"))
+
+ind_delta
 ```
 
 
