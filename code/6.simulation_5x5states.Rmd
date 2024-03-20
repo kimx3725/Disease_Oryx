@@ -160,7 +160,7 @@ n_ind <- 1
 start <- make_start(c(runif(1, 300000, 360000), runif(1, 1600000, 1700000)), ta_ = 0)
 
 # number of total steps to generate
-total_days <- 15
+total_days <- 60
 ```
 
 
@@ -173,9 +173,9 @@ prep for the recursive Markov chain manner for getting the infection & behaviora
 # Define the transitional probability matrix for infection
 trans_m <- matrix(c(
   0.7, 0.3, 0, 0, 0,
-  0.12, 0.48, 0, 0.4, 0,
-  0, 0, 0.2, 0.6, 0.2,
-  0, 0, 0.1, 0.6, 0.3,
+  0.25, 0.5, 0, 0.25, 0,
+  0, 0, 0.3, 0.65, 0.05,
+  0, 0, 0.3, 0.65, 0.05,
   0, 0, 0, 0, 1
 ), nrow = 5, ncol = 5, byrow = TRUE)
 
@@ -214,6 +214,9 @@ state_info <- sapply(x0, ReMC, total_days)
 
 # Display the state information
 print(state_info)
+
+# save the state info per id 
+#saveRDS(state_info, "sim_state_info_id1_60days.rds")
 ```
 
 
@@ -383,7 +386,7 @@ ssf_df <- ssf_df[!duplicated(ssf_df$positions.x_, ssf_df$positions.y_),]
 ssf_df
 
 # save the data
-#saveRDS(ssf_df, "ssf_sim_trial_15days.rds")
+#saveRDS(ssf_df, "ssf_sim_trk_60days.rds")
 ```
 
 # Visualizations
@@ -407,12 +410,14 @@ ggplot()+
 p <- ggplot()+
   geom_spatraster(data = shrub, show.legend = FALSE)+
   geom_point(data = ssf_df, aes(positions.x_, positions.y_), size = 0.7)+
-  labs(title = "Oryx simulation with 4 different states")+
+  labs(title = "Oryx simulation with 5 different states")+
   facet_wrap(~state,
              labeller = labeller(state = state_names),
              nrow = 1)+
   scale_fill_terrain_c()+
-  theme_bw()
+  theme_bw()+
+  xlab("Eastings")+
+  ylab("Northings")
 
 p + theme(axis.text.x=element_text(angle=45, hjust=1))
 ```

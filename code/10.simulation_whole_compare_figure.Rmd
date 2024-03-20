@@ -1,0 +1,118 @@
+---
+title: "6.fit_HMM_oryx"
+author: "Dennis Kim"
+date: "2024-01-22"
+output: html_document
+---
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(dplyr)
+library(readr)
+library(data.table)
+library(here)
+library(stringr)
+library(tidyr)
+library(purrr)
+library(lubridate)
+library(scales)
+library(forcats)
+
+# call environmental data
+library(terra)
+
+# analysis
+library(adehabitatLT)
+
+# visualization 
+library(ggplot2)
+library(patchwork)
+
+options(width = 150)
+```
+
+Read in the prep data
+```{r read in prep data}
+# Location data of the oryx 
+whole_df <- readr::read_rds(here::here("data/hmm_visualization_data", "pool_hmm_sequence.rds"))
+sim_df <- readr::read_rds(here::here("data/hmm_visualization_data", "simulation_hmm_sequence.rds"))
+
+# only select the columns that we will use 
+whole_df <- whole_df %>% dplyr::select("ID", "states", "x", "y", "time")
+sim_df <- sim_df %>% dplyr::select("ID", "states", "x", "y", "time")
+
+# change the col name to "state"
+names(whole_df)[2] <- "state"
+names(sim_df)[2] <- "state"
+
+# create group names 
+whole_df$group <- "real"
+sim_df$group <- "simulation"
+
+whole_df
+sim_df
+
+# select one individual id 5 from the whole_df 
+real_id11 <- whole_df %>% filter(ID == "11")
+
+# bind two data 
+all_df <- rbind(real_id5, sim_df)
+
+# relevel the group 
+all_df$group <- factor(all_df$group, level = c("real", "simulation"))
+
+all_df
+```
+
+visualize 
+```{r visualization}
+# new facet label names for supp variable 
+supp.labs <- c("real" = "Real Track", 
+               "simulation" = "Simulated Track")
+
+real_id5
+
+
+fig6a <- ggplot(real_id11 %>% arrange(time), mapping = aes(x, y, col = state))+
+  geom_point(size = 1)+
+  geom_path(size = 0.01)+
+  scale_color_manual(values = c("#fbb4ae", "#377eb8", "#4daf4a", "#984ea3", "black"),
+                     labels = c("NE", "NR", "IE", "IR", "D"))+
+  theme(panel.border = element_rect(color = "grey", fill = NA, size = 1), 
+        panel.background = element_blank(),
+        axis.text = element_text(size = 5),
+        axis.text.x = element_text(angle=45),
+        legend.position = "none")+
+  xlab("Longtidue")+
+  ylab("Latitude")+
+  ggtitle("(a)")
+
+fig6b <- ggplot(sim_df %>% arrange(time), mapping = aes(x, y, col = state))+
+  geom_point(size = 1)+
+  geom_path(size = 0.01)+
+  scale_color_manual(values = c("#fbb4ae", "#377eb8", "#4daf4a", "#984ea3", "black"),
+                     labels = c("NE", "NR", "IE", "IR", "D"))+
+  theme(panel.border = element_rect(color = "grey", fill = NA, size = 1), 
+        panel.background = element_blank(),
+        axis.text = element_text(size = 5),
+        axis.text.x = element_text(angle=45))+
+  xlab("Longtidue")+
+  ylab("")+
+  ggtitle("(b)")
+
+fig6a
+fig6b
+
+# combine the figures 
+grid <- cowplot::plot_grid(fig6a, fig6b, nrow = 1, rel_widths = c(1/2,1/2), align = "v")
+
+grid
+```
+
+
+# Footer
+```{r footer}
+sessionInfo()
+```
