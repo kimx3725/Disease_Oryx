@@ -112,9 +112,9 @@ dist <- list(step = "gamma",
 # Initial parameters
 # (step mean for state 1, step mean for state 2, step mean for state N so on... same for step SD s1, step SD s2) and (angle concentration s1, angle concentration s2)
 Par0_5s <- list(       # mean
-                step = c(400, 50, 250, 50, 4,
+                step = c(400, 50, 250, 10, 1,
                        # sd
-                         400, 50, 250, 50, 4), 
+                         400, 50, 250, 10, 1), 
                 angle = c(0.05, 0.1, 0.01, 0.1, 0.001)
                 )
 
@@ -154,7 +154,7 @@ model visualization - hmm
 hmm
 
 # save the hmm output 
-#saveRDS(hmm, "pool_hmm_shrub_trial4.rds")
+saveRDS(hmm, "pool_hmm_shrub_trial6.rds")
 #hmm <- readr::read_rds(here::here("data/hmm_real_outputs", "pool_hmm_shrub.rds"))
 ```
 
@@ -165,7 +165,7 @@ plot(hmm, breaks = 20, animals = 1, ask = FALSE)
 
 save the plots as a pdf
 ```{r example, echo=FALSE, results='hide'}
-pdf("pool_HMM_Oryx_shrub_m4.pdf")
+pdf("pool_HMM_Oryx_shrub_m6.pdf")
 plot(hmm, breaks = 20, ask=FALSE)
 dev.off()
 ```
@@ -242,7 +242,7 @@ data_hmm$states <- factor(states, levels = c("1", "2", "3", "4", "5"))
 data_hmm %>% filter(states == 5) %>% distinct(ID, states)
 
 # save the rds file for the state sequences 
-saveRDS(data_hmm, "pool_hmm_shrub_sequence_trial4.rds")
+saveRDS(data_hmm, "pool_hmm_shrub_sequence_trial6.rds")
 ```
 
 # Footer
