@@ -1,0 +1,135 @@
+---
+title: "2b.Ndeath_data_prep2"
+author: "Dennis Kim"
+date: "2024-01-08"
+output: html_document
+---
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(dplyr)
+library(readr)
+library(data.table)
+library(here)
+library(stringr)
+library(tidyr)
+library(purrr)
+library(lubridate)
+library(devtools)
+
+# call environmental data
+library(terra)
+
+# analysis
+library(momentuHMM)
+library(adehabitatLT)
+library(hmmSSF)
+
+# visualization 
+library(ggplot2)
+
+options(width = 150)
+```
+
+## 1.1. Format of tracking data
+
+Read in the gps data
+```{r read in data}
+# Location data of the oryx S
+oryx <- readr::read_rds(here::here("data/filtered_dataset", "oryx_trk.Rdata"))
+
+# filter out only rainy season data 
+rain_oryx <- oryx %>% filter(season_level == "rainy")
+
+#B15F, R02M, R08M, R12F, R38F
+inf_unk_index <- rain_oryx %>% filter(cause_of_death == "Infected" | cause_of_death == "Unknown") %>% distinct(masterID, num_id)
+```
+
+Reformat the data and filter the necessary data inputs only -- The locations need to be projected from long-lat to E-N prior to analysis, as the package uses Euclidean (planar) eometry to derive metrics such as step lengths and turning analges. They also need to be at a regular time interval. 
+```{r data reformat}
+oryx.df <- rain_oryx %>% dplyr::select(num_id, utm_e, utm_n, date)
+colnames(oryx.df) <- c("ID", "x", "y", "time")
+oryx.df
+```
+
+```{r trk visualization}
+# visualize the path 
+ggplot(oryx.df, aes(x, y, group = NA, col = factor(ID)))+
+  geom_path()+
+  geom_point(size = 0.2)+
+  coord_equal()
+```
+
+look at the track 
+```{r control steps}
+oryx.prep <- hmmSSF::get_controls(obs = oryx.df, n_controls = 5, distr = "gamma")
+oryx.df1 <- oryx.prep %>% filter(obs == 1)
+```
+
+extract shrub cover information
+```{r shrub cover}
+# call shrub cover
+shrub <- terra::rast("D:/Oryx/data/env_data/shrub/final.shrub.tif")
+
+# extract shrub values from the ratser
+shrub <- terra::extract(shrub, oryx.df1[, c("x", "y")]) 
+oryx.df1$shrub <- shrub[, -1]
+
+# create a dataframe
+data <- oryx.df1
+
+# set unrealistic step lengths as NAs and the rest of the location and angle as NA as well.
+data <- data %>% mutate(step = ifelse(step > 5000 | step == 0, NA, step))
+data <- data %>% mutate(x = ifelse(is.na(step), NA, x)) %>% mutate(y = ifelse(is.na(step), NA, y)) %>% mutate(angle = ifelse(is.na(step), NA, step))
+
+# only select the valid columns for converting data to data_hmm
+data_na <- data %>% dplyr::select(ID, x, y, time, shrub)
+
+# bring the body condition information
+data_bc <- rain_oryx %>% dplyr::select(num_id, date) %>% distinct(num_id, date)
+colnames(data_bc) <- c("ID", "time")
+data_bc
+
+# left join the data 
+tot_df <- data_na %>% left_join(data_bc, by = c("ID", "time"))
+tot_df
+```
+
+include death status information a total 7 individuals: 
+R02M	1			
+R38F	4
+R42M	18
+B49M	24
+B05M	37			
+B74M	49
+B69F	50
+```{r death info}
+inf_unk_index
+
+# individuals that do not have death test info
+non_inf_df <- tot_df %>% filter(! ID %in% inf_unk_index$num_id)
+non_inf_df <- non_inf_df %>% mutate(death = NA) # add death columns with NAs
+non_inf_df
+
+
+inf_df <- tot_df %>% 
+  filter(ID %in% inf_unk_index$num_id) %>%   # Filter rows based on IDs
+  group_by(ID) %>%                           # Group by ID
+  mutate(death = ifelse(row_number() == n(), 5, NA)) %>%  # Assign '5' to the last row of each group, NA otherwise
+  ungroup()
+
+
+# rbind the entire dataset
+whole_df <- rbind(non_inf_df, inf_df)
+whole_df %>% filter(death == 5) %>% distinct(ID)
+
+# save the whole dataset
+#readr::write_rds(whole_df, path = here("data/HMM", "HMM_prep_data_Ndeath.Rdata"))
+```
+
+# Footer
+```{r footer}
+sessionInfo()
+```
