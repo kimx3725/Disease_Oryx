@@ -42,15 +42,6 @@ oryx <- readr::read_rds(here::here("data/HMM", "HMM_prep_data_Ndeath.Rdata"))
 oryx
 
 summary(oryx)
-  
-# Location data of the oryx 
-oryx_id <- readr::read_rds(here::here("data/filtered_dataset", "oryx_trk.Rdata"))
-oryx_id
-#B15F, R02M, R08M, R12F, R38F
-death_index <- oryx_id %>% distinct(masterID, num_id, cause_of_death)
-death_index <- death_index %>% filter(num_id %in% oryx$ID)
-
-#saveRDS(death_index, "cause_of_death_index.Rdata")
 ```
 
 prepare data for HMM format
