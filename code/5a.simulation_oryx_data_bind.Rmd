@@ -1,0 +1,108 @@
+---
+title: "5a.simulation_oryx_data_bind"
+author: "Dennis Kim"
+date: "2024-01-30"
+output: html_document
+---
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(readr)
+library(data.table)
+library(here)
+library(purrr)
+library(lubridate)
+library(scales)
+library(conflicted)
+library(tidyverse)
+library(scico)
+library(patchwork)
+library(tictoc)
+
+# call environmental data
+library(terra)
+library(sf)
+
+# analysis
+library(momentuHMM)
+library(adehabitatLT)
+
+# visualization 
+library(ggplot2)
+
+options(width = 150)
+
+conflict_prefer("select", "dplyr")
+conflict_prefer("filter", "dplyr")
+conflicts_prefer(lubridate::hour)
+conflicts_prefer(terra::plot)
+conflicts_prefer(dplyr::lag)
+```
+
+# simulation data 
+```{r sim data}
+# simulation data
+sim1 <- readr::read_rds(here::here("data/simulation_data", "sim_trk_10ids_1.rds"))
+sim2 <- readr::read_rds(here::here("data/simulation_data", "sim_trk_10ids_2.rds"))
+sim3 <- readr::read_rds(here::here("data/simulation_data", "sim_trk_10ids_3.rds"))
+
+sim2$id <- sim2$id+10
+sim3$id <- sim3$id+20
+
+sim1
+sim2
+sim3
+
+sim_df <- rbind(sim1, sim2, sim3)
+sim_df
+
+# remove the duplicates per id
+sim_df <- sim_df %>%
+  group_by(id) %>%
+  distinct(positions.x_, positions.y_, .keep_all = TRUE) %>%
+  ungroup() 
+
+
+# change the column names 
+colnames(sim_df) <- c("ID", "state", "x", "y", "time", "dt")
+
+# data summary
+sim_df <- as.data.frame(sim_df)
+sim_df
+
+# save the sim_df
+#saveRDS(sim_df, "sim_df.rds")
+```
+
+prepare data for HMM format
+```{r HMM formats}
+# prepare data for HMM (comput step lengths and turning angles)
+data_hmm <- momentuHMM::prepData(sim_df, type = "UTM", covNames = "state")
+
+# check the hmm dataset
+head(data_hmm, 10)
+
+# non-infected exploring: mean of non infected step and turn angle
+data_hmm %>% filter(state == 1) %>% drop_na(.) %>% summarise(., step_mean = mean(step))
+data_hmm %>% filter(state == 1) %>% drop_na(.) %>% summarise(., ta_mean = mean(angle))
+
+# non-infected resting: mean of infected step and turn angle
+data_hmm %>% filter(state == 2) %>% drop_na(.) %>% summarise(., step_mean = mean(step))
+data_hmm %>% filter(state == 2) %>% drop_na(.) %>% summarise(., ta_mean = mean(angle))
+
+# infected exploring: mean of non infected step and turn angle
+data_hmm %>% filter(state == 3) %>% drop_na(.) %>% summarise(., step_mean = mean(step))
+data_hmm %>% filter(state == 3) %>% drop_na(.) %>% summarise(., ta_mean = mean(angle))
+
+# infected resting: mean of infected step and turn angle
+data_hmm %>% filter(state == 4) %>% drop_na(.) %>% summarise(., step_mean = mean(step))
+data_hmm %>% filter(state == 4) %>% drop_na(.) %>% summarise(., ta_mean = mean(angle))
+```
+
+
+# Footer
+```{r footer}
+sessionInfo()
+```

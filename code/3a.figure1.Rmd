@@ -1,0 +1,119 @@
+---
+title: "4a.figure1"
+author: "Dennis Kim"
+date: "2023-12-05"
+output: html_document
+---
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(dplyr)
+library(readr)
+library(data.table)
+library(DT)
+library(here)
+library(stringr)
+library(tidyr)
+library(purrr)
+library(lubridate)
+library(amt)
+library(raster)
+library(sf)
+
+# visuazliation
+library(cowplot)
+library(grid)
+library(gridExtra)
+library(ggplot2)
+
+options(width = 150)
+
+# set knitr options 
+opts_chunk$set(fig.width = 6, fig.height = 5, comment = NA)
+```
+
+subset the seasonal data for further visualization
+```{r season subset}
+# read the data
+explore.all <- readRDS(here::here("data/filtered_dataset", "Ndeath_figure1_data.Rdata"))
+
+# get rid of one individual 
+explore.all <- explore.all %>% filter(!masterID == "B69F")
+explore.all
+
+dead <- explore.all %>% filter(cause_of_death == "Dead") %>% filter(season_level == "rainy")
+dead_inf <- explore.all %>% filter(cause_of_death == "Dead_infected") %>% filter(season_level == "rainy")
+alive <- explore.all %>% filter(cause_of_death == "Alive")
+
+dead %>% distinct(season_level)
+
+explore.all1 <- rbind(dead, dead_inf, alive)
+
+# filter seasons
+
+rainy <- explore.all1 %>% filter(season_level == "rainy") 
+hotdry <- explore.all1 %>% filter(season_level == "hotdry")
+cooldry <- explore.all1 %>% filter(season_level == "cooldry")
+```
+
+# visualization 
+```{r visualization plots}
+fills = c("cooldry" = "#e5f5f9" , "hotdry" = "#e7e1ef", "rainy" = "#f7fcb9")
+#colors = c("under" = "#fe9929", "optimal" = "#238b45", "over" = "#d94701")
+
+season_infect_plot <- ggplot(explore.all1, aes(x = week, y = num_id))+
+  
+  # cooldry 
+  geom_rect(data = cooldry, aes(xmin = min(week), 
+                              xmax = max(week), 
+                              ymin = min(num_id), 
+                              ymax = max(rainy$num_id), 
+                              fill = "cooldry"), colour = NA)+
+  
+  # hotdry 
+  geom_rect(data = hotdry, aes(xmin = min(week), 
+                               xmax = max(week), 
+                               ymin = min(num_id), 
+                               ymax = max(rainy$num_id), 
+                               fill = "hotdry"), colour = NA)+
+  
+  # rainy season
+  geom_rect(data = rainy, aes(xmin = min(week), 
+                              xmax = max(week), 
+                              ymin = min(num_id), 
+                              ymax = max(num_id), 
+                              fill = "rainy"), colour = NA)+
+  
+  geom_point(stat='identity', colour = "black", alpha = 1)+
+  
+  scale_fill_manual(name = "Season",
+                    values = fills,
+                    guide = guide_legend(override.aes = list(alpha= 1))
+                    )+
+  
+  #scale_color_manual(name = "Weekly Body Condition",
+                     #values = colors
+                     #)+
+  
+  scale_y_continuous("ID", labels = as.character(explore.all$num_id), breaks = explore.all$num_id, expand = expansion(mult = c(0, .02),add = c(1, 0)))+
+  
+  theme(strip.text = element_text(size = 9),
+        axis.text.y = element_text(size = 9),
+        panel.background = element_rect(fill = "white", color = "black"),
+        panel.border = element_rect(fill = "transparent", color = "black", linewidth = 0.5))+
+  
+  facet_wrap(~cause_of_death)
+
+season_infect_plot
+```
+save the coefficients 
+```{r downloads}
+ggsave(season_infect_plot, filename = "figure1.png", width = 9, height = 6, dpi = 300, units = "in")
+```
+
+# Footer
+```{r footer}
+sessionInfo()
+```
