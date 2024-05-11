@@ -1,0 +1,147 @@
+---
+title: "6.fit_HMM_oryx"
+author: "Dennis Kim"
+date: "2024-01-22"
+output: html_document
+---
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(dplyr)
+library(readr)
+library(data.table)
+library(here)
+library(stringr)
+library(tidyr)
+library(purrr)
+library(lubridate)
+library(scales)
+library(forcats)
+
+# call environmental data
+library(terra)
+
+# analysis
+library(momentuHMM)
+library(adehabitatLT)
+
+# visualization 
+library(ggplot2)
+library(patchwork)
+
+options(width = 150)
+```
+
+Read in the prep data
+```{r read in prep data}
+# Location data of the oryx 
+hmm <- readr::read_rds(here::here("data/HMM_outputs", "hmm_sim_output.rds"))
+sim_sequence <- readr::read_rds(here::here("data/hmm_sequence_data", "HMM_simulation_sequence.rds"))
+
+hmm
+colnames(sim_sequence)[8] <- "null_state"
+colnames(sim_sequence)[9] <- "est_state"
+sim_sequence
+```
+
+transition probability
+```{r tpm}
+# get the estimation with 95 confidence intervals 
+trProb <- CIreal(hmm, alpha = 0.95, parms = "gamma")
+trProb
+
+trProb$gamma$est
+
+# convert it to df 
+hmm_estimate_tpm <- data.frame(est = c(trProb$gamma$est), se = c(trProb$gamma$se), lower = c(trProb$gamma$lower), upper = c(trProb$gamma$upper))
+
+# na omit
+hmm_estimate_tpm <- hmm_estimate_tpm %>% filter(est > 0)
+hmm_estimate_tpm
+hmm_estimate_tpm$param <- c("tp11", "tp21", "tp12", "tp22", "tp33", "tp43", "tp24", "tp34", "tp44", "tp25", "tp45", "tp55")
+hmm_estimate_tpm
+
+# add true values 
+hmm_estimate_tpm$true <- c(0.7, 0.2499, 0.3, 0.5, 0.3, 0.2, 0.25, 0.7, 0.5, 0.0001, 0.3, 1)
+
+hmm_estimate_tpm[is.na(hmm_estimate_tpm)] <- 0
+hmm_estimate_tpm
+
+#save 
+#saveRDS(hmm_estimate_tpm, "HMM_estimate_tpm.rds")
+```
+
+## plot1: paratmeter estimation with 95% confidence intervals - comparison 
+
+```{r plot1}
+fig9 <- ggplot(hmm_estimate_tpm, aes(x = factor(param), y = est, ymin = est-lower, ymax = est+upper, color = factor(param)))+
+  geom_pointrange()+
+  geom_point(data = hmm_estimate_tpm, aes(y = true), color = "black", size = 2)+
+  theme(panel.border = element_rect(color = "grey", fill = NA, size = 1), 
+        panel.background = element_blank(),
+        legend.position = "none")+
+  xlab("Transition Parameters")+
+  ylab("Estimation")
+
+fig9
+```
+
+confusion matrix
+```{r confusion matrix}
+melted_trProb <- melt(trProb$gamma$est)
+colnames(melted_trProb) <- c("From", "To", "est_value")
+melted_trProb <- melted_trProb %>% filter(est_value > 0)
+melted_trProb$true_value <- c(0.7, 0.2499, 0.3, 0.5, 0.3, 0.2, 0.25, 0.7, 0.5, 0.0001, 0.3, 1) 
+melted_trProb
+
+# Calculate the difference between est_value and true_value
+melted_trProb <- transform(melted_trProb, value = abs(est_value - true_value))
+melted_trProb
+
+fig10a <- ggplot(data = melted_trProb, aes(y = reorder(From, desc(From)), x= To, fill = est_value)) +
+  geom_tile(color = "black") +
+  scale_fill_gradient2(
+    low = "white", high = "#b30000",
+    limit = c(0, 1), space = "Lab",
+    name = "Prob. of Transitioning"
+    ) +
+    coord_fixed()+
+  geom_text(aes(To, From, label = round(est_value, 2)), color = "black", size = 4)+
+  scale_x_discrete(position = "top")+
+  theme(panel.border = element_rect(color = "black", fill = NA, size = 1), 
+        panel.background = element_blank(),
+        legend.position = "none")+
+  xlab("To")+
+  ylab("From")+
+  ggtitle("(a)")
+
+fig10b <- ggplot(data = melted_trProb, aes(y = reorder(From, desc(From)), x= To, fill = true_value)) +
+  geom_tile(color = "black") +
+  scale_fill_gradient2(
+    low = "white", high = "#b30000",
+    limit = c(0, 1), space = "Lab",
+    name = "Prob. of Transitioning"
+    ) +
+    coord_fixed()+
+  geom_text(aes(To, From, label = round(true_value, 2)), color = "black", size = 4)+
+  scale_x_discrete(position = "top")+
+  theme(panel.border = element_rect(color = "black", fill = NA, size = 1), 
+        panel.background = element_blank())+
+  xlab("To")+
+  ylab("From")+
+  ggtitle("(b)")
+```
+
+combine the plot 
+```{r plot combine}
+(fig10a | fig10b)  
+```
+
+
+
+# Footer
+```{r footer}
+sessionInfo()
+```
