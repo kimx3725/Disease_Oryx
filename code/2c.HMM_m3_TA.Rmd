@@ -68,12 +68,14 @@ dist <- list(step = "gamma",
 
 # Initial parameters
 # (step mean for state 1, step mean for state 2, step mean for state N so on... same for step SD s1, step SD s2) and (angle concentration s1, angle concentration s2)
-Par0_5s <- list(       # mean
-                step = c(400, 50, 250, 50, 4,
-                       # sd
-                         400, 50, 250, 50, 4), 
-                angle = c(0.05, 0.1, 0.01, 0.1, 0.001)
-                )
+Par0_5s <- list(step = c(400, 50, 250, 50, 4,   # step means
+                         400, 50, 250, 50, 4),  # step sds
+                angle = c(0, pi, 0, pi, pi,  # angle means
+                          0.05, 0.1, 0.01, 0.1, 0.001) # angle concentrations
+               )
+
+# Specify whether to estimate angle means
+estAngleMean <- list(angle = TRUE)
 
 # constrain transition probabilities - fix the transition probability matrix to prevent some of the transitions 
 #we set to NA the columns of unconstrained transition probabilities, and we again fix the intercept of the other columns to a large negative number (here -1e6) to set the corresponding transition probabilities to be virtually zero (i.e., impossible transition).
@@ -100,6 +102,7 @@ hmm <- momentuHMM::fitHMM(data_hmm,
                           Par0 = Par0_5s,
                           fixPar = fixPar,
                           formula = ~shrub,
+                          estAngleMean = estAngleMean,
                           knownStates=data_hmm$death,
                           stateNames = stateNames)
 ```
@@ -110,8 +113,8 @@ model visualization - hmm
 hmm
 
 # save the hmm output 
-saveRDS(hmm, "hmm_m2_output.rds")
-#hmm <- readr::read_rds(here::here("data/hmm_real_outputs", "pool_hmm_shrub.rds"))
+saveRDS(hmm, "hmm_m3_output.rds")
+#hmm <- readr::read_rds(here::here("data/hmm_real_outputs", "pool_hmm_shrub_ta.rds"))
 ```
 
 ```{r hmm visualization}
@@ -121,7 +124,7 @@ plot(hmm, breaks = 20, animals = 1, ask = FALSE)
 
 save the plots as a pdf
 ```{r example, echo=FALSE, results='hide'}
-pdf("HMM_m2.pdf")
+pdf("HMM_m3.pdf")
 plot(hmm, breaks = 20, ask=FALSE)
 dev.off()
 ```
@@ -200,7 +203,7 @@ data_hmm %>% filter(states == 5) %>% distinct(ID, states)
 data_hmm
 
 # save the rds file for the state sequences 
-saveRDS(data_hmm, "HMM_m2_sequence.rds")
+saveRDS(data_hmm, "HMM_m3_sequence.rds")
 ```
 
 # Footer
