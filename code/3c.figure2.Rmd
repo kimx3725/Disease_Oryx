@@ -1,0 +1,96 @@
+---
+title: "4b.figure2"
+author: "Dennis Kim"
+date: "2024-01-22"
+output: html_document
+---
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(dplyr)
+library(readr)
+library(data.table)
+library(here)
+library(stringr)
+library(tidyr)
+library(purrr)
+library(lubridate)
+library(scales)
+library(forcats)
+library(collapse)
+library(naniar)
+
+# visualization 
+library(ggplot2)
+library(patchwork)
+library(momentuHMM)
+
+options(width = 150)
+```
+
+## 1.1. Format of tracking data
+
+Read in the prep data
+```{r read in prep data}
+# Location data of the oryx 
+m2 <- readr::read_rds(here::here("data/hmm_sequence_data", "HMM_m3_sequence.rds"))
+
+# change the col name to "state"
+names(m2)[12] <- "state"
+
+m2
+```
+
+list of infection stats per id
+```{r list of status}
+m2.2 <- m2 %>% mutate(julian = lubridate::yday(time),
+                            week = lubridate::week(time)) # create the week column
+
+m2.2 %>% filter(cause_of_death == "Dead" | cause_of_death == "Dead_infected") %>% distinct(ID, cause_of_death)
+```
+
+# model 1 
+```{r model 1}
+fig4_m2 <- m2.2 %>% filter(ID %in% c(10, 13, 18, 33))
+
+# new facet label names for dose variable 
+id.labs <- c("10" = "Dead Infected 10", 
+             "13" =  "Dead 13", 
+             "18" =  "Dead Infected 18", 
+             "33" =  "Dead Infected 33")
+
+fig4_m2 <- fig4_m2 %>% mutate(x2 = x/1000, y2 = y/1000)
+
+# free scale 
+fig2 <- ggplot(fig4_m2, mapping = aes(x2, y2, col = state, group = ID))+
+  geom_point(size = 0.5, position=position_jitter(h=0.1, w=0.1))+
+  geom_path(size = 0.01)+
+  scale_color_manual(values = c("#E69F00", "#0072B2", "#009E73", "#CC79A7", "black"),
+                     labels = c("NE", "NR", "IE", "IR", "D"))+
+  facet_wrap(~ID,
+             labeller = labeller(ID = id.labs),
+             scales = "free",
+             ncol = 2)+
+  theme(panel.border = element_rect(color = "grey", fill = NA, size = 1), 
+        panel.background = element_blank(),
+        axis.text = element_text(size = 7))+
+  xlab("Easting (km)")+
+  ylab("Northing (km)")
+
+fig2
+```
+
+combine the plots 
+```{r combine the plots}
+# combine the figures 
+#grid <- cowplot::plot_grid(fig3a, fig3b, nrow = 1, rel_widths = c(1/3,2/3), align = "h")
+
+fig2
+```
+
+# Footer
+```{r footer}
+sessionInfo()
+```

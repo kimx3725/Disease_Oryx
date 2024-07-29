@@ -1,0 +1,357 @@
+---
+title: "4b.figure4"
+author: "Dennis Kim"
+date: "2024-01-22"
+output: html_document
+---
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(dplyr)
+library(readr)
+library(data.table)
+library(here)
+library(stringr)
+library(tidyr)
+library(purrr)
+library(lubridate)
+library(scales)
+library(forcats)
+library(collapse)
+library(naniar)
+library(circular)
+
+# visualization 
+library(ggplot2)
+library(patchwork)
+library(momentuHMM)
+
+options(width = 150)
+```
+
+## 1.1. Format of tracking data
+
+Read in the prep data
+```{r read in prep data}
+# Location data of the oryx 
+m2 <- readr::read_rds(here::here("data/HMM_outputs", "hmm_m3_output.rds"))
+```
+
+# estimated whole step length visauzliation 
+
+```{r function}
+# Define the sh() and sc() functions
+sh <- function(mean, sd) { return(mean^2 / sd^2) }
+sc <- function(mean, sd) { return(sd^2 / mean) }
+```
+
+## Step Lengths
+```{r model 2}
+# Define the range for x
+x <- seq(0, 8000, length=8000)
+
+meanNE <- m2$mle$step[1,1]
+sdNE <- m2$mle$step[2,1] 
+
+meanNR <- m2$mle$step[1,2]
+sdNR <- m2$mle$step[2,2]  
+
+meanIE <- m2$mle$step[1,3]
+sdIE <- m2$mle$step[2,3]  
+
+meanIR <- m2$mle$step[1,4] 
+sdIR <- m2$mle$step[2,4]
+
+meanD <- m2$mle$step[1,5]
+sdD <- m2$mle$step[2,5]
+
+y_NE <- dgamma(x, shape = sh(meanNE,sdNE), scale = sc(meanNE,sdNE))
+y_NR <- dgamma(x, shape = sh(meanNR,sdNR), scale = sc(meanNR,sdNR))
+y_IE <- dgamma(x, shape = sh(meanIE,sdIE), scale = sc(meanIE,sdIE))
+y_IR <- dgamma(x, shape = sh(meanIR,sdIR), scale = sc(meanIR,sdIR))
+y_D <- dgamma(x, shape = sh(meanD,sdD), scale = sc(meanD,sdD))
+
+# combine densities in a single dataframe for more convenient plotting
+df.y_NE <- data.frame(dens=y_NE, state="NE", x=x)
+df.y_NR <- data.frame(dens=y_NR,  state="NR", x=x)
+df.y_IE <- data.frame(dens=y_IE,  state="IE", x=x)
+df.y_IR <- data.frame(dens=y_IR,  state="IR", x=x)
+df.y_D <- data.frame(dens=y_D,  state="D", x=x)
+
+cmb <- rbind(df.y_NE, df.y_NR, df.y_IE, df.y_IR, df.y_D)
+cmb %>% summary()
+
+# reorder factor levels so "total" appears bottom of the legend
+cmb$state <- factor(cmb$state, levels = c("NE", "NR", "IE", "IR", "D"))
+
+#cmb <- cmb %>%
+  #filter_all(all_vars(is.finite(.)))
+
+cmb
+```
+
+step lengths and turn angle data 
+```{r movement data}
+sequence <- readr::read_rds(here::here("data/hmm_sequence_data", "HMM_m3_sequence.rds"))
+sequence <- sequence %>% dplyr::select(step, angle, states)
+sequence
+```
+
+# Step lengths 
+```{r SL}
+# NE
+sl_1 <- ggplot()+
+  geom_histogram(data = sequence %>% filter(states == 1), aes(x = step, y =..density..), binwidth = 10, alpha = 0.8, fill ="darkgrey", position = "identity")+
+  geom_line(data=cmb %>% filter(state == "NE"), aes(x=x, y=dens, colour=state, linetype=state), size=1) +
+  scale_colour_manual(values="#E69F00") +
+  scale_linetype_manual(values=c("solid"))+
+  scale_x_continuous(limits=c(0,7000)) +
+  theme_minimal() +
+  theme(
+    #legend.title = element_blank(),
+    axis.text = element_text(size = 7),
+    axis.text.x = element_text(angle=45),
+    #legend.position = "none",
+    strip.text = element_blank()
+  ) +
+  ylab("Density") +
+  xlab("Step (m)")
+
+#NR
+sl_2 <- ggplot()+
+  geom_histogram(data = sequence %>% filter(states == 2), aes(x = step, y =..density..), binwidth = 10, alpha = 0.8, fill ="darkgrey", position = "identity")+
+  geom_line(data=cmb %>% filter(state == "NR"), aes(x=x, y=dens, colour=state, linetype=state), size=1) +
+  scale_colour_manual(values="#0072B2") +
+  scale_linetype_manual(values=c("solid"))+
+  scale_x_continuous(limits=c(0,3000)) +
+  theme_minimal() +
+  theme(
+    legend.title = element_blank(),
+    axis.text = element_text(size = 7),
+    axis.text.x = element_text(angle=45),
+    #legend.position = "none",
+    strip.text = element_blank()
+  ) +
+  ylab("Density") +
+  xlab("Step (m)")
+
+#IE
+sl_3 <- ggplot()+
+  geom_histogram(data = sequence %>% filter(states == 3), aes(x = step, y =..density..), binwidth = 10, alpha = 0.8, fill ="darkgrey", position = "identity")+
+  geom_line(data=cmb %>% filter(state == "IE"), aes(x=x, y=dens, colour=state, linetype=state), size=1) +
+  scale_colour_manual(values="#009E73") +
+  scale_linetype_manual(values=c("solid"))+
+  scale_x_continuous(limits=c(0,3000)) +
+  theme_minimal() +
+  theme(
+    legend.title = element_blank(),
+    axis.text = element_text(size = 7),
+    axis.text.x = element_text(angle=45),
+    #legend.position = "none",
+    strip.text = element_blank()
+  ) +
+  ylab("Density") +
+  xlab("Step (m)")
+
+#IR
+sl_4 <- ggplot()+
+  geom_histogram(data = sequence %>% filter(states == 4), aes(x = step, y =..density..), binwidth = 10, alpha = 0.8, fill ="darkgrey", position = "identity")+
+  geom_line(data=cmb %>% filter(state == "IR"), aes(x=x, y=dens, colour=state, linetype=state), size=1) +
+  scale_colour_manual(values="#CC79A7") +
+  scale_linetype_manual(values=c("solid"))+
+  scale_x_continuous(limits=c(0,1000)) +
+  theme_minimal() +
+  theme(
+    legend.title = element_blank(),
+    axis.text = element_text(size = 7),
+    axis.text.x = element_text(angle=45),
+    #legend.position = "none",
+    strip.text = element_blank()
+  ) +
+  ylab("Density") +
+  xlab("Step (m)")
+
+#D
+sl_5 <- ggplot()+
+  geom_histogram(data = sequence %>% filter(states == 5), aes(x = step, y =..density..), binwidth = 10, alpha = 0.8, fill ="darkgrey", position = "identity")+
+  geom_line(data=cmb %>% filter(state == "D"), aes(x=x, y=dens, colour=state, linetype=state), size=1) +
+  scale_colour_manual(values="black") +
+  scale_linetype_manual(values=c("solid"))+
+  scale_x_continuous(limits=c(0,1000)) +
+  theme_minimal() +
+  theme(
+    legend.title = element_blank(),
+    axis.text = element_text(size = 7),
+    axis.text.x = element_text(angle=45),
+    #legend.position = "none",
+    strip.text = element_blank()
+  ) +
+  ylab("Density") +
+  xlab("Step (m)")
+```
+
+check the plots
+```{r sl plots check}
+sl_1
+sl_2
+sl_3
+sl_4
+sl_5
+```
+
+# Turn Angles
+```{r ta df}
+# Define the range for x - angles from -pi to pi
+x <- seq(-pi, pi, length = 1000)
+
+meanNE_ta <- m2$mle$angle[1,1]
+cNE <- m2$mle$angle[2,1] 
+
+meanNR_ta <- m2$mle$angle[1,2]
+cNR <- m2$mle$angle[2,2]  
+
+meanIE_ta <- m2$mle$angle[1,3]
+cIE <- m2$mle$angle[2,3]  
+
+meanIR_ta <- m2$mle$angle[1,4] 
+cIR <- m2$mle$angle[2,4]
+
+meanD_ta <- m2$mle$angle[1,5]
+cD <- m2$mle$angle[2,5]
+
+# Calculate the von Mises density
+ta_NE <- dvonmises(x, mu = meanNE_ta, kappa = cNE)
+ta_NR <- dvonmises(x, mu = meanNR_ta, kappa = cNR)
+ta_IE <- dvonmises(x, mu = meanIE_ta, kappa = cIE)
+ta_IR <- dvonmises(x, mu = meanIR_ta, kappa = cIR)
+ta_D <- dvonmises(x, mu = meanD_ta, kappa = cD)
+
+# Combine densities in a single dataframe for more convenient plotting
+df.ta_NE <- data.frame(dens = ta_NE, state = "NE", x = x)
+df.ta_NR <- data.frame(dens = ta_NR, state = "NR", x = x)
+df.ta_IE <- data.frame(dens = ta_IE, state = "IE", x = x)
+df.ta_IR <- data.frame(dens = ta_IR, state = "IR", x = x)
+df.ta_D <- data.frame(dens = ta_D, state = "D", x = x)
+
+ta_df <- rbind(df.ta_NE, df.ta_NR, df.ta_IE, df.ta_IR, df.ta_D)
+ta_df %>% summary()
+
+# Reorder factor levels so "total" appears bottom of the legend
+ta_df$state <- factor(ta_df$state, levels = c("NE", "NR", "IE", "IR", "D"))
+
+ta_df
+```
+
+TA plots
+```{r TA}
+# NE
+ta_1 <- ggplot()+
+  geom_histogram(data = sequence %>% filter(!is.na(angle)) %>% filter(states == 1), aes(x = angle, y =..density..), binwidth = 0.25, alpha = 0.8, fill ="darkgrey", col = "white", position = "identity")+
+  geom_line(data=ta_df %>% filter(state == "NE"), aes(x=x, y=dens, colour=state, linetype=state), size=1) +
+  scale_colour_manual(values="#E69F00") +
+  scale_linetype_manual(values=c("solid"))+
+  theme_minimal() +
+  theme(
+    #legend.title = element_blank(),
+    axis.text = element_text(size = 7),
+    axis.text.x = element_text(angle=45),
+    #legend.position = "none",
+    strip.text = element_blank()
+  ) +
+  ylab("Density") +
+  xlab("Angle (radians)")
+
+# NR
+ta_2 <- ggplot()+
+  geom_histogram(data = sequence %>% filter(!is.na(angle)) %>% filter(states == 2), aes(x = angle, y =..density..), binwidth = 0.25, alpha = 0.8, fill ="darkgrey", col = "white", position = "identity")+
+  geom_line(data=ta_df %>% filter(state == "NR"), aes(x=x, y=dens, colour=state, linetype=state), size=1) +
+  scale_colour_manual(values="#0072B2") +
+  scale_linetype_manual(values=c("solid"))+
+  theme_minimal() +
+  theme(
+    legend.title = element_blank(),
+    axis.text = element_text(size = 7),
+    axis.text.x = element_text(angle=45),
+    #legend.position = "none",
+    strip.text = element_blank()
+  ) +
+  ylab("Density") +
+  xlab("Angle (radians)")
+
+# IE
+ta_3 <- ggplot()+
+  geom_histogram(data = sequence %>% filter(!is.na(angle)) %>% filter(states == 3), aes(x = angle, y =..density..), binwidth = 0.25, alpha = 0.8, fill ="darkgrey", col = "white", position = "identity")+
+  geom_line(data=ta_df %>% filter(state == "IE"), aes(x=x, y=dens, colour=state, linetype=state), size=1) +
+  scale_colour_manual(values="#009E73") +
+  scale_linetype_manual(values=c("solid"))+
+  theme_minimal() +
+  theme(
+    legend.title = element_blank(),
+    axis.text = element_text(size = 7),
+    axis.text.x = element_text(angle=45),
+    #legend.position = "none",
+    strip.text = element_blank()
+  ) +
+  ylab("Density") +
+  xlab("Angle (radians)")
+
+# IR
+ta_4 <- ggplot()+
+  geom_histogram(data = sequence %>% filter(!is.na(angle)) %>% filter(states == 4), aes(x = angle, y =..density..), binwidth = 0.25, alpha = 0.8, fill ="darkgrey", col = "white", position = "identity")+
+  geom_line(data=ta_df %>% filter(state == "IR"), aes(x=x, y=dens, colour=state, linetype=state), size=1) +
+  scale_colour_manual(values="#CC79A7") +
+  scale_linetype_manual(values=c("solid"))+
+  theme_minimal() +
+  theme(
+    legend.title = element_blank(),
+    axis.text = element_text(size = 7),
+    axis.text.x = element_text(angle=45),
+    #legend.position = "none",
+    strip.text = element_blank()
+  ) +
+  ylab("Density") +
+  xlab("Angle (radians)")
+
+# D
+ta_5 <- ggplot()+
+  geom_histogram(data = sequence %>% filter(!is.na(angle)) %>% filter(states == 5), aes(x = angle, y =..density..), binwidth = 0.25, alpha = 0.8, fill ="darkgrey", col = "white", position = "identity")+
+  geom_line(data=ta_df %>% filter(state == "D"), aes(x=x, y=dens, colour=state, linetype=state), size=1) +
+  scale_colour_manual(values="black") +
+  scale_linetype_manual(values=c("solid"))+
+  theme_minimal() +
+  theme(
+    legend.title = element_blank(),
+    axis.text = element_text(size = 7),
+    axis.text.x = element_text(angle=45),
+    #legend.position = "none",
+    strip.text = element_blank()
+  ) +
+  ylab("Density") +
+  xlab("Angle (radians)")
+```
+
+check the plots
+```{r sl plots check}
+ta_1
+ta_2
+ta_3
+ta_4
+ta_5
+```
+
+combine the plots 
+```{r combine the plots}
+# combine the figures 
+#grid <- cowplot::plot_grid(fig3a, fig3b, nrow = 1, rel_widths = c(1/3,2/3), align = "h")
+
+(sl_1 / sl_2 / sl_3 / sl_4 / sl_5)+ plot_layout(axis_titles = "collect")
+
+(ta_1 / ta_2 / ta_3 / ta_4 / ta_5)+ plot_layout(axis_titles = "collect")
+```
+
+# Footer
+```{r footer}
+sessionInfo()
+```
