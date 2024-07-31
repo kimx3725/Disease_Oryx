@@ -1,0 +1,83 @@
+---
+title: "3f.figure4"
+author: "Dennis Kim"
+date: "2024-01-22"
+output: html_document
+---
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# Get latest version of momentuHMM from Github
+library(htmltools)
+#devtools::install_github("bmcclintock/momentuHMM", ref = "develop")
+
+library(ggplot2)
+theme_set(theme_bw())
+library(momentuHMM)
+library(patchwork)
+```
+
+## 1.1. Format of tracking data
+
+Read in the prep data
+```{r read in prep data}
+# Location data of the oryx 
+mod <- readRDS(here::here("data/HMM_outputs", "hmm_m4_output.rds"))
+```
+
+plot the separate transition probabilities
+```{r debug }
+# Pass the filtered and default parameters to the plot function
+layout(1)
+plot(mod, ask = FALSE)
+```
+
+
+```{r plot}
+plot(mod, plotCI = TRUE, return = TRUE, ask = FALSE, plotTracks = FALSE)
+
+# Get plot data from momentuHMM
+par(mar = c(4, 4, 2, 2)) # Bottom, left, top, right margins
+plot_data <- plot(mod, plotCI = TRUE, return = TRUE, ask = FALSE, plotTracks = FALSE)
+
+tpm_data_list <- plot_data$estimates$beta$shrub
+
+
+# Add transition probability name as column
+tpm_data_list <- lapply(1:length(tpm_data_list), function(i) 
+    cbind(tpm_data_list[[i]], names(tpm_data_list)[i]))
+
+
+# Combine into a single data frame for plotting
+tpm_data <- do.call(rbind, tpm_data_list)
+colnames(tpm_data)[6] <- "name"
+for(i in seq_along(mod$stateNames)) {
+    tpm_data$name <- gsub(i, mod$stateNames[i], tpm_data$name)
+}
+tpm_data$name <- factor(tpm_data$name, levels = unique(tpm_data$name))
+
+
+# Create plot of all transition probabilities
+ggplot(tpm_data, aes(shrub, est)) +
+    geom_ribbon(aes(ymin = lci, ymax = uci), alpha = 0.2) +
+    geom_line() +
+    facet_wrap("name", nrow = 5) +
+    ylim(c(0, 1)) +
+    labs(y = "transition probability")
+
+
+# Create plot with only a few selected transition probabilities
+keep <- which(tpm_data$name %in% c("NE -> NR", "NR -> IR", "NR -> D",
+                                   "IE -> IR", "IR -> IE"))
+ggplot(tpm_data[keep,], aes(shrub, est)) +
+    geom_ribbon(aes(ymin = lci, ymax = uci), alpha = 0.2) +
+    geom_line() +
+    facet_wrap("name", nrow = 1) +
+    ylim(c(0, 1)) +
+    labs(y = "transition probability")
+```
+
+# Footer
+```{r footer}
+sessionInfo()
+```
