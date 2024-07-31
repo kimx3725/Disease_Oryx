@@ -37,7 +37,7 @@ options(width = 150)
 Read in the prep data
 ```{r read in prep data}
 # model output
-m2 <- readr::read_rds(here::here("data/HMM_outputs", "hmm_m2_output.rds"))
+m2 <- readr::read_rds(here::here("data/HMM_outputs", "hmm_m4_output.rds"))
 ```
 
 prepare data for HMM format
