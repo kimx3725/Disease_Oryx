@@ -1,5 +1,5 @@
 ---
-title: "3b.HMM_m2_shrub_Ndeath"
+title: "1.HMM_model_fit"
 author: "Dennis Kim"
 date: "2024-01-22"
 output: html_document
