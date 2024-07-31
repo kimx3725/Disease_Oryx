@@ -1,5 +1,5 @@
 ---
-title: "6.simulate_HMM"
+title: "7.simulate_HMM"
 author: "Dennis Kim"
 date: "2024-01-22"
 output: html_document
