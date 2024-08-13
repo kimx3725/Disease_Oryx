@@ -208,7 +208,7 @@ ggplot() +
   scale_shape_manual(name = "Body Condition",
                      values = c(15, 17, 19),
                      na.value = 16,
-                     labels = c("Under", "Optimal", "Over")) +
+                     labels = c("Optimal", "Under", "Over")) +
   
   theme(axis.text = element_text(size = 7)) +
   xlab("Julian") +
