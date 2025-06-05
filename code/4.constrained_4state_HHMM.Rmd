@@ -1,7 +1,7 @@
 ---
-title: "19.HHMM4"
+title: "4.constrained_4state_HHMM"
 author: "Dennis Kim"
-date: "2025-01-16"
+date: "`r Sys.Date()`"
 output: html_document
 ---
 
@@ -23,65 +23,6 @@ options(width = 150)
 
 # 1. Format of tracking data
 
-Read in the prep data and make levels for the hierarchical structure
-```{r read in prep data}
-# Location data of the oryx 
-data <- readRDS(here::here("data", "04.04.2025_hourly_final_preHMM_dataset.Rdata"))
-
-# remove everything before the dash in ID columns
-data$ID <- sub("-.*", "", data$ID)
-
-# ordered by ID and time
-data <- data %>% arrange(ID, time)
-```
-
-```{r data with levels}
-# Initialise new data frame
-data_with_level <- NULL
-
-# Loop over IDs
-ids <- unique(data$ID)
-
-for(i in 1:length(ids)) {
-    cat("ID", i, "/", length(ids), "\n")
-    
-    # For this ID, initialise level to 2
-    subdata <- subset(data, ID == ids[i])
-    subdata$level <- "2"
-    
-    # Times as numeric, for calculations
-    num_times <- as.numeric(subdata$time)
-    
-    # Initialise cut-off time
-    t0 <- num_times[1]
-    while(t0 < max(num_times)) {
-        # Indices greater than current cut-off time
-        ind <- which(num_times >= t0)
-        
-        # Set first level to 1 and second level to 2i
-        # for this 24-hour period
-        subdata$level[ind[1]] <- "1"
-        subdata$level[ind[2]] <- "2i"
-        
-        # Increase cut-off by 24h to move to next day
-        t0 <- t0 + 3*24*3600
-    }
-    
-    data_with_level <- rbind(data_with_level, subdata)
-}
-
-# replace the death column state 5 to 6 
-data_with_level <- data_with_level %>% mutate(death = ifelse(death == 5, 6, NA)) 
-
-# view the data 
-head(data_with_level)
-```
-
-```{r data prep}
-data_with_level %>% filter(ID == "29")
-```
-
-
 prepare data for HMM format
 ```{r HMM formats}
 # prepare data for HMM (compute step lengths and turning angles)
@@ -96,12 +37,6 @@ data_hhmm <- momentuHMM::prepData(data_with_level,
 min_step <- min(data_hhmm$step[data_hhmm$step > 0], na.rm = TRUE)
 which_zero <- which(data_hhmm$step == 0)
 data_hhmm$step[which_zero] <- runif(length(which_zero), 0, min_step)
-
-# check the hmm dataset
-head(data_hhmm, 10)
-
-# save the hmm prep data
-#readr::write_rds(data_hhmm, path = here("data", "04.11.2025_data_HHMM.Rdata"))
 ```
 
 # 2. HHMM structure  
@@ -379,37 +314,7 @@ hhmm <- momentuHMM::fitHMM(data_hhmm,
 
 # Print parameter estimates
 hhmm
-
-# save the hmm output 
-#readr::write_rds(hhmm, path = here("data", "04.11.2025.4s_HHMM.Rdata"))
 ```
-
-save the sequence plot
-```{r state spatial visualization}
-# generate state sequence
-states <- momentuHMM::viterbi(hhmm)
-
-# check the length
-length(states)
-nrow(data_hhmm)
-
-# generate the most likely state squences at each level of the hierachy 
-hStates <- momentuHMM::viterbi(hhmm, hierarchical = TRUE)
-lapply(hStates, length)
-
-# include the sequence states into the dataset
-data_hhmm$states <- states
-
-unique(data_hhmm$states)
-
-data_hhmm$states <- factor(states, levels = c("1", "2", "3", "4", "5", "6"))
-
-data_hhmm %>% summary()
-
-# save the rds file for the state sequences 
-#readr::write_rds(data_hhmm, path = here("data", "04.11.2025.4s_HHMM_viberti.Rdata"))
-```
-
 # Footer
 ```{r footer}
 sessionInfo()
