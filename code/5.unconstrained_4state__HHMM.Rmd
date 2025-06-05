@@ -1,0 +1,340 @@
+---
+title: "Unconstrained HHMM"
+author: "Dennis Kim"
+date: "2025-01-16"
+output: html_document
+---
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(dplyr)
+library(readr)
+library(here)
+library(tidyr)
+library(momentuHMM)
+library(mitools)
+library(data.tree)
+library(DiagrammeR)
+
+options(width = 150)
+```
+
+# 1. Format of tracking data
+
+prepare data for HMM format
+```{r HMM formats}
+data_hhmm <- readRDS(here("data", "04.11.2025_data_HHMM.Rdata"))
+```
+
+# 2. HHMM structure  
+
+Our case has no data streams observed at the coarse-scale level (infected vs non-infected).
+
+## 2.1. Hierarchical data stream structure
+
+Specify the probability distribution for the fine-scale step length and turn angle data stream via the hierDist data tree Node 
+```{r data stream structure}
+# data stream distributions: 
+## level 1 = coarse level (no data streams)
+## level 2 = fine level (step="gamma", angle = "vm")
+
+hierDist <- data.tree::Node$new("oryx disease HHMM dist")
+hierDist$AddChild(name="level1")
+hierDist$AddChild(name="level2")
+hierDist$level2$AddChild(name="step", dist = "gamma")
+hierDist$level2$AddChild(name = "angle", dist = "vm")
+
+print(hierDist, "dist")
+#plot(hierDist)
+```
+
+## 2.2. Hierarchical state structure
+
+define HHMM strcture via the hierStates data tree Node
+```{r HHMM structure}
+# define hierarchical HMM: 
+## state 1-2 = coarse state 1 (non-infected)
+## state 3 = corase state 2 (infected)
+## state 4 = coarse state 3 (death) 
+
+hierStates <- data.tree::Node$new("oryx disease HHMM states")
+hierStates$AddChild(name="nonInfected")
+hierStates$nonInfected$AddChild(name="e", state=1) # exploring
+hierStates$nonInfected$AddChild(name="r", state=2) # resting
+hierStates$AddChild(name="Infected")
+hierStates$Infected$AddChild(name="i", state=3) # infected
+hierStates$Infected$AddChild(name="id", state = 4) # infected dummy
+hierStates$AddChild(name="Death")
+hierStates$Death$AddChild(name="d", state = 5) # death
+hierStates$Death$AddChild(name="dd", state =6) # death dummy
+
+print(hierStates, "state")
+#plot(hierStates)
+```
+
+## 2.3. Data stream probability distribution
+
+We assume the fine-scale data stream probability distribution depends on coarse-scale state. 
+
+### 2.3.1. Setting up the starting values 
+```{r starting values}
+# Number of states (leaves in the hierarchical tree)
+nbStates <- length(hierStates$Get("states", filterFun = data.tree::isLeaf))
+nbStates
+
+# Defining starting values
+# Initialize start values for step length (gamma) and angle (vm) distributions
+# 6 fine-scale states: e, r, i, id, d, dd
+
+# Step length parameters
+mu0 <- c(1800, 380, 25, 25, 4, 4)  # step mu for e, r, i/id, d/dd
+sd0 <- c(1050, 370, 20, 20, 4, 4)  # step sd for e, r, i/id, d/dd
+
+# Turn angle parameters
+amu0 <- c(-0.03, 0.03, -3, -3, 3, 3)  # angle mean for e, r, i/id, d/dd
+kappa0 <- c(1.5, 0.16, 0.36, 0.36, 0.3, 0.3)  # angle concentration for e, r, i/id, d/dd
+
+Par0 <- list(
+  step = c(mu0, sd0), 
+  angle = c(amu0, kappa0)
+)
+
+# Check the structure
+str(Par0)
+```
+
+constrain fine-scale data stream distributions to be same using DM
+```{r DM}
+# DM - constrain fine-scale data stream distributions to be same 
+# so that infected (i) and infected dummy (id) share the same parameters,
+# and death (d) and death dummy (dd) share the same parameters.
+
+#####################################################
+## Pseudo-design matrix for observation parameters ##
+#####################################################
+# Step length
+dw_DM_step <- matrix(0, nrow = 2*nbStates, ncol = 2*(nbStates - 2))
+dw_DM_step[1,1] <- 1 # mu1
+dw_DM_step[2,2] <- 1 # mu2
+dw_DM_step[3:4,3] <- 1 # mu3 = mu4
+dw_DM_step[5:6,4] <- 1 # mu5 = mu6
+dw_DM_step[7,5] <- 1 # sd1
+dw_DM_step[8,6] <- 1 # sd2
+dw_DM_step[9:10,7] <- 1 # sd3 = sd4
+dw_DM_step[11:12,8] <- 1 # sd5 = sd6
+rownames(dw_DM_step) <- paste0(rep(c("mu", "sd"), each = nbStates), 1:nbStates)
+colnames(dw_DM_step) <- paste0(rep(c("mu", "sd"), each = 4),
+                               c("1", "2", "34", "56"), ":(Intercept)")
+
+# Turning angle (constraints are the same as step length)
+# Turning angle (von Mises distribution)
+dw_DM_angle <- matrix(0, nrow = 2*nbStates, ncol = 2*(nbStates - 2))
+dw_DM_angle[1,1] <- 1 # amu1
+dw_DM_angle[2,2] <- 1 # amu2
+dw_DM_angle[3:4,3] <- 1 # amu3 = amu4
+dw_DM_angle[5:6,4] <- 1 # amu5 = amu6
+dw_DM_angle[7,5] <- 1 # kappa1
+dw_DM_angle[8,6] <- 1 # kappa2
+dw_DM_angle[9:10,7] <- 1 # kappa3 = kappa4
+dw_DM_angle[11:12,8] <- 1 # kappa5 = kappa6
+
+rownames(dw_DM_angle) <- paste0(rep(c("amu", "kappa"), each = nbStates), 1:nbStates)
+colnames(dw_DM_angle) <- paste0(rep(c("amu", "kappa"), each = 4),
+                                c("1", "2", "34", "56"), ":(Intercept)")
+
+# Define DM list for each data stream, applying the constraint
+DM <- list(
+  step = dw_DM_step,
+  angle = dw_DM_angle
+)
+
+# Get initial parameter values for data stream probability distributions
+Par <- getParDM(
+  data_hhmm, 
+  hierStates = hierStates, 
+  hierDist = hierDist, 
+  estAngleMean = list(angle = TRUE),
+  Par = Par0, 
+  DM = DM,
+)
+
+Par
+```
+
+### 2.3.2. Covariates
+
+include shrub cover and time since release covariates on the fine-scale state transiiton probabilities - specify this via the hierFormula argument:
+```{r covariates}
+# define hierarchical t.p.m. formula(s)
+hierFormula <- data.tree::Node$new("oryx disease HHMM formula")
+hierFormula$AddChild(name = "level1")
+hierFormula$AddChild(name= "level2", formula = ~ shrub + time_since_release)
+```
+
+### 2.3.3. Transitional probability matrix (t.p.m)
+
+#### 2.3.3.1. Set initial parameter values
+Assume transition probabilities between coarse-scale states are distinct. Set initial parameter values. Define separate transition probability matrices for coarse-scale and fine-scale states via hierBeta argument:
+```{r initial parameter tpm}
+# Define the transition matrix for the coarse-level states (Non-Infected, Infected, Death)
+hierBeta <- data.tree::Node$new("oryx beta")
+
+# Add coarse-level state transition matrix
+hierBeta$AddChild(name = "level1",
+                  beta = matrix(c(
+                      -2,  # s > i
+                      -5, # s > d 
+                      -2, # i > s
+                      -3, # i > d
+                      -1e6, # d > s
+                      -1e6), # d> i
+                      nrow = 1, 
+                      ncol = 6, 
+                      byrow = TRUE))
+
+# fine scale level
+#Exploring State (1):
+##Can transition to the Resting state (2) or remain in Exploring (1).
+
+# Resting State (2):
+##Can transition to the Exploring state (1) or reamin in Resting (2).
+
+# Infected State (3):
+##Individuals cannot leave this state.
+
+# Death State (4)
+##Individuals cannot leave this state
+
+hierBeta$AddChild(name="level2")
+# Fine-scale transition matrix for Non-Infected (with covariates)
+hierBeta$level2$AddChild("nonInfected",
+                         beta = matrix(c(
+                             # Transition from Exploring -> Resting (covariates: shrub, time_since_release)
+                             -2, 0, 0, 
+                             # Transition from Resting -> Resting (covariates: shrub, time_since_release)
+                             -2, 0, 0
+                         ), nrow = 3, ncol = 2))
+
+# Fine-scale transition matrix for Infected (with covariates)
+hierBeta$level2$AddChild("Infected",
+                         beta = matrix(c(
+                             # Transition from Infected -> ID (covariates: shrub, time_since_release)
+                             -1e6, -1e6, -1e6,
+                             # Transition from ID -> ID (covariates: shrub, time_since_release)
+                             -1e6, -1e6, -1e6
+                         ), nrow = 3, ncol = 2))
+
+# Fine-scale transition matrix for Death (with covariates)
+hierBeta$level2$AddChild("Death",
+                         beta = matrix(c(
+                             # Transition from Death -> DD (covariates: shrub, time_since_release)
+                             -1e6, -1e6, -1e6,
+                             # Transition from DD -> DD (covariates: shrub, time_since_release)
+                             -1e6, -1e6, -1e6
+                         ), nrow = 3, ncol = 2))
+```
+
+#### 2.3.3.2. Define parameter constraints
+```{r paramaeter constraint tpm}
+fixBeta <- data.tree::Node$new("tpm constraints")
+# No transition from coarse scale infected to non-infected to death
+fixBeta$AddChild(name = "level1",
+                 fixPar = matrix(c(NA, 
+                                   NA, 
+                                   NA,
+                                   NA,
+                                   -1e6,
+                                   -1e6), nrow = 1))
+
+fixBeta$AddChild(name = "level2")
+fixBeta$level2$AddChild(
+    "nonInfected",
+    fixPar = matrix(c(NA, NA, NA, # Exploring > Resting
+                      NA, NA, NA # Resting > Resting
+                      ),
+                    nrow = 3, ncol = 2))
+
+fixBeta$level2$AddChild(
+    "Infected",
+    fixPar = matrix(c(-1e6, -1e6, -1e6, # Infected > Infected dummy
+                      -1e6, -1e6, -1e6 # Infected dummy > Infected dummy
+                      ),
+                    nrow = 3, ncol = 2))
+
+fixBeta$level2$AddChild(
+    "Death",
+    fixPar = matrix(c(-1e6, -1e6, -1e6, # Death > Death dummy
+                      -1e6, -1e6, -1e6 # Death dummy > Death dummy
+                      ),
+                    nrow = 3, ncol = 2))
+
+# Ensure fixBeta matrix is constrained.. 
+fixBeta$level2$nonInfected$fixPar
+```
+
+# 2.3. Fit the HHMM
+
+```{r check HHMM}
+# check hierarchical model specification and parameters 
+momentuHMM::checkPar0(data_hhmm,
+                      hierStates = hierStates,
+                      hierDist = hierDist,
+                      hierFormula = hierFormula,
+                      Par0 = Par,
+                      DM = DM,
+                      hierBeta = hierBeta,
+                      fixPar = list(beta = fixBeta),
+                      estAngleMean = list(angle=TRUE))
+```
+
+```{r fit model}
+# fit hierarchical HMM 
+hhmm <- momentuHMM::fitHMM(data_hhmm,
+                      hierStates = hierStates,
+                      hierDist = hierDist,
+                      hierFormula = hierFormula,
+                      Par0 = Par,
+                      DM = DM,
+                      hierBeta = hierBeta,
+                      fixPar = list(beta = fixBeta),
+                      estAngleMean = list(angle=TRUE))
+
+# Print parameter estimates
+hhmm
+
+# save the hmm output 
+readr::write_rds(hhmm, path = here("data", "05.13.2025.4s_unconstrained_HHMM.Rdata"))
+```
+
+save the sequence plot
+```{r state spatial visualization}
+# generate state sequence
+states <- momentuHMM::viterbi(hhmm)
+
+# check the length
+length(states)
+nrow(data_hhmm)
+
+# generate the most likely state squences at each level of the hierachy 
+hStates <- momentuHMM::viterbi(hhmm, hierarchical = TRUE)
+lapply(hStates, length)
+
+# include the sequence states into the dataset
+data_hhmm$states <- states
+
+unique(data_hhmm$states)
+
+data_hhmm$states <- factor(states, levels = c("1", "2", "3", "4", "5", "6"))
+
+data_hhmm %>% summary()
+
+# save the rds file for the state sequences 
+readr::write_rds(data_hhmm, path = here("data", "05.13.2025.4s_unconstrained_HHMM_viberti.Rdata"))
+```
+
+# Footer
+```{r footer}
+sessionInfo()
+```
