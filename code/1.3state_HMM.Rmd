@@ -1,7 +1,7 @@
 ---
-title: "3_3st_HMM"
+title: "1.3state_HMM"
 author: "Dennis Kim"
-date: "2025-01-08"
+date: "`r Sys.Date()`"
 output: html_document
 ---
 
@@ -35,26 +35,10 @@ options(width = 150)
 
 ## 1.1. Format of tracking data
 
-Read in the prep data
-```{r read in prep data}
-# Location data of the oryx 
-oryx.2018 <- readRDS(here::here("data", "04.04.2025_hourly_final_preHMM_dataset.Rdata"))
-oryx.2018 <- oryx.2018 %>% mutate(death = ifelse(death == 5, 3, death))
-# remove everything before the dash in ID columns
-oryx.2018$ID <- sub("-.*", "", oryx.2018$ID)
-
-# ensure it is arrange with time per ID
-oryx.2018 <- oryx.2018 %>% group_by(ID) %>% arrange(ID, time) %>% ungroup() %>% as.data.frame()
-oryx.2018
-```
-
 prepare data for HMM format
 ```{r HMM formats}
 # prepare data for HMM (compute step lengths and turning angles)
 data_hmm <- momentuHMM::prepData(oryx.2018, type = "UTM", covNames = c("shrub", "time_since_release"))
-
-# check the hmm dataset
-head(data_hmm, 10)
 ```
 
 # Non-constrained 3-state HMM
@@ -108,9 +92,6 @@ hmm <- momentuHMM::fitHMM(data_hmm,
                           stateNames = stateNames)
 
 hmm
-
-# save the hmm output 
-readr::write_rds(hmm, path = here("data", "04.07.2025.3s_M1.Rdata"))
 ```
 
 save the viberti 1
@@ -121,9 +102,6 @@ data_hmm1$states <- states
 data_hmm1$states <- factor(states, levels = c("1", "2", "3"))
 
 data_hmm1
-
-# save the rds file for the state sequences 
-readr::write_rds(data_hmm1, path = here("data", "04.07.2025.3s_M1_viberti.Rdata"))
 ```
 
 # Constrained 3-state HMM
@@ -154,9 +132,6 @@ hmm2 <- momentuHMM::fitHMM(data_hmm,
                           stateNames = stateNames)
 
 hmm2
-
-# save the rds file for the state sequences 
-#readr::write_rds(hmm2, path = here("data", "04.07.2025.3s_M2.Rdata"))
 ```
 
 save the viberti 2
@@ -167,9 +142,6 @@ data_hmm2$states <- states
 data_hmm2$states <- factor(states, levels = c("1", "2", "3"))
 
 data_hmm2
-
-# save the rds file for the state sequences 
-readr::write_rds(data_hmm2, path = here("data", "04.07.2025.3s_M2_viberti.Rdata"))
 ```
 
 # constrained model with known states
@@ -186,9 +158,6 @@ hmm3 <- momentuHMM::fitHMM(data_hmm,
                           stateNames = stateNames)
 
 hmm3
-
-# save the rds file for the state sequences 
-readr::write_rds(hmm3, path = here("data", "04.07.2025.3s_M3.Rdata"))
 ```
 
 
