@@ -1,0 +1,159 @@
+---
+title: "4st_SIR_HMM"
+author: "Dennis Kim"
+date: "2025-08-29"
+output: html_document
+---
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(dplyr)
+library(readr)
+library(data.table)
+library(here)
+library(stringr)
+library(tidyr)
+library(purrr)
+library(lubridate)
+library(scales)
+
+# call environmental data
+library(terra)
+
+# analysis
+library(momentuHMM)
+library(adehabitatLT)
+library(mitools)
+
+# visualization 
+library(ggplot2)
+
+options(width = 150)
+```
+
+## 1.1. Format of tracking data
+
+Read in the prep data
+```{r read in prep data}
+# Location data of the oryx 
+oryx.2018 <- readRDS(here::here("data", "04.04.2025_hourly_final_preHMM_dataset.Rdata"))
+# remove everything before the dash in ID columns
+oryx.2018$ID <- sub("-.*", "", oryx.2018$ID)
+
+# ensure it is arrange with time per ID
+oryx.2018 <- oryx.2018 %>% group_by(ID) %>% arrange(ID, time) %>% ungroup() %>% as.data.frame()
+```
+
+prepare data for HMM format
+```{r HMM formats}
+# prepare data for HMM (compute step lengths and turning angles)
+data_hmm <- momentuHMM::prepData(oryx.2018, type = "UTM", covNames = c("shrub", "time_since_release"))
+
+# check the hmm dataset
+head(data_hmm, 10)
+```
+
+# Non-constrained 4-state HMM
+
+null model without any restriction
+```{r 4 state hmm covariates}
+# number of states 
+nbStates <- 4
+
+# label states
+stateNames <- c("1" = "S","2" = "I","3" = "R", "4" = "D")
+
+# Observation distributions (step lengths, turning angles)
+dist <- list(step = "gamma", 
+             angle = "vm")
+
+# Initial parameters
+# (step mean for state 1, step mean for state 2, step mean for state N so on... same for step SD s1, step SD s2) and (angle concentration s1, angle concentration s2)
+Par0_4s <- list(step = c(761, 300, 750, 4,   # step means
+                         1103, 442, 1000, 4),  # step sds
+                angle = c(-0.02, 0.24, -0.01, -3,  # angle means
+                          0.4, 0.015, 0.3, 0.57) # angle concentrations
+               )
+
+# Specify whether to estimate angle means
+estAngleMean <- list(angle = TRUE)
+
+# make sure the transition between resting to death for shrub cover effects also 0 -- independent. 
+fixbeta <-  matrix(c( # S: 1->2          1->3                1->4                
+                            NA, NA, NA,   -1e6, -1e6, -1e6,   -1e6, -1e6, -1e6,   
+                      # I: 2->1                2->3           2->4              
+                            -1e6, -1e6, -1e6,  NA, NA, NA,    NA, 0, 0,
+                      # R: 3->1                 3->2                3->4            
+                            -1e6, -1e6, -1e6,   -1e6, -1e6, -1e6,   -1e6, -1e6, -1e6,
+                      # D: 4->1               4->2                 4->3          
+                            -1e6, -1e6, -1e6,  -1e6, -1e6,  -1e6,  -1e6, -1e6, -1e6), 
+                   nrow = 1, 
+                   byrow = TRUE)
+
+# fix initial values 
+fixPar0 <- list(beta = fixbeta)
+
+# Fit an unconstrained model
+hmm <- momentuHMM::fitHMM(data_hmm, 
+                          nbStates = nbStates, 
+                          dist = dist, 
+                          Par0 = Par0_4s,
+                          fixPar = fixPar0,
+                          formula = ~shrub + time_since_release,
+                          estAngleMean = estAngleMean,
+                          #knownStates=data_hmm$death,
+                          stateNames = stateNames)
+
+hmm
+
+# save the hmm output 
+readr::write_rds(hmm, path = here("data", "09.02.2025.4s_SIR_remain_v2.Rdata"))
+```
+
+save the viberti
+```{r state spatial visualization}
+states <- momentuHMM::viterbi(hmm)
+data_hmm1 <- data.frame(data_hmm)
+data_hmm1$states <- states
+data_hmm1$states <- factor(states, levels = c("1", "2", "3", "4"))
+
+# save the rds file for the state sequences 
+readr::write_rds(data_hmm1, path = here("data", "09.02.2025.4s_SIR_remain_v2_viberti.Rdata"))
+```
+
+save the plots as a pdf
+```{r example, echo=FALSE, results='hide'}
+pdf("SIR_remained_v2_HMM.pdf")
+plot(hmm, breaks = 20, ask=FALSE)
+dev.off()
+```
+
+```{r time series plot}
+sir_vib <- data_hmm1 %>% dplyr::select(ID, step, states)
+sir_vib$ID <- sub("-.*", "", sir_vib$ID)
+sir_vib1 <- sir_vib %>% na.omit()
+
+ggplot(sir_vib1, aes(1:nrow(sir_vib1), step, col = states, group = NA)) + 
+    geom_line() +
+    geom_point(size = 0.5)  +
+  scale_color_manual(values = c("#E69F00", "#0072B2", "black"), 
+                     labels = c("1; S(Susceptible)", 
+                                "2; I (Infected)", 
+                               "4; D (Dead)"),
+                     name = "State") +
+    facet_wrap("ID", scales = "free_x") +
+    labs(x = "Time", y = "Step length", col = "State") +
+    theme_bw() +
+    theme(strip.text = element_blank(), 
+          strip.background = element_blank(),
+          axis.text = element_blank(), 
+          axis.ticks = element_blank())+
+  ylim(0, 3000)
+```
+
+# Footer
+```{r footer}
+sessionInfo()
+```

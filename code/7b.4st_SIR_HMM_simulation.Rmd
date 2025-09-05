@@ -1,0 +1,181 @@
+---
+title: "4st_SIR_HMM"
+author: "Dennis Kim"
+date: "2025-08-29"
+output: html_document
+---
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(dplyr)
+library(readr)
+library(data.table)
+library(here)
+library(stringr)
+library(tidyr)
+library(purrr)
+library(lubridate)
+library(scales)
+
+# call environmental data
+library(terra)
+
+# analysis
+library(momentuHMM)
+library(adehabitatLT)
+library(mitools)
+
+# visualization 
+library(ggplot2)
+
+options(width = 150)
+```
+
+## 1.1. Format of tracking data
+
+Read in the prep data
+```{r read in prep data}
+# Load simulation data
+sim <- readr::read_rds(here::here("data/simulation", "09.04.2025_20id_30days_SIR_simulation.rds"))
+
+colnames(sim) <- c("ID", "state", "x", "y", "t", "dt") 
+sim <- as.data.frame(sim)
+
+summary(sim)
+```
+
+prepare data for HMM format
+```{r HMM formats}
+# prepare data for HMM (compute step lengths and turning angles)
+data_hmm <- momentuHMM::prepData(sim, type = "UTM", covNames = "state")
+
+# check the hmm dataset
+head(data_hmm, 10)
+```
+
+check the step lengths and turn angle per simluated state
+```{r sim state sl and ta}
+# Susceptible: mean of non infected step and turn angle
+data_hmm %>% filter(state == 1) %>% drop_na(.) %>% summarise(., step_mean = mean(step))
+data_hmm %>% filter(state == 1) %>% drop_na(.) %>% summarise(., ta_mean = mean(angle))
+
+# Infected: mean of infected step and turn angle
+data_hmm %>% filter(state == 2) %>% drop_na(.) %>% summarise(., step_mean = mean(step))
+data_hmm %>% filter(state == 2) %>% drop_na(.) %>% summarise(., ta_mean = mean(angle))
+
+# Recovered: mean of non infected step and turn angle
+data_hmm %>% filter(state == 3) %>% drop_na(.) %>% summarise(., step_mean = mean(step))
+data_hmm %>% filter(state == 3) %>% drop_na(.) %>% summarise(., ta_mean = mean(angle))
+
+# Dead: mean of infected step and turn angle
+data_hmm %>% filter(state == 4) %>% drop_na(.) %>% summarise(., step_mean = mean(step))
+data_hmm %>% filter(state == 4) %>% drop_na(.) %>% summarise(., ta_mean = mean(angle))
+```
+
+# Non-constrained 4-state HMM
+
+null model without any restriction
+```{r 4 state hmm covariates}
+# number of states 
+nbStates <- 4
+
+# label states
+stateNames <- c("1" = "S","2" = "I","3" = "R", "4" = "D")
+
+# Observation distributions (step lengths, turning angles)
+dist <- list(step = "gamma", 
+             angle = "vm")
+
+# Initial parameters
+# (step mean for state 1, step mean for state 2, step mean for state N so on... same for step SD s1, step SD s2) and (angle concentration s1, angle concentration s2)
+Par0_4s <- list(step = c(400, 60, 420, 5,   # step means
+                         566, 134, 543, 16),  # step sds
+                angle = c(0, 0., 0, 0,  # angle means
+                          2, 0.06, 0.1, 0.58) # angle concentrations
+               )
+
+# Specify whether to estimate angle means
+estAngleMean <- list(angle = TRUE)
+
+# make sure the transition between resting to death for shrub cover effects also 0 -- independent. 
+fixbeta <-  matrix(c( # S: 1->2   1->3    1->4                
+                            NA,   -1e6,   -1e6,    
+                      # I: 2->1   2->3    2->4              
+                            -1e6,  NA,    NA, 
+                      # R: 3->1   3->2    3->4            
+                            -1e6, -1e6,   -1e6,
+                      # D: 4->1   4->2    4->3          
+                            -1e6, -1e6,   -1e6), 
+                   nrow = 1, 
+                   byrow = TRUE)
+
+# fix initial values 
+fixPar0 <- list(beta = fixbeta)
+
+# Fit an unconstrained model
+hmm <- momentuHMM::fitHMM(data_hmm, 
+                          nbStates = nbStates, 
+                          dist = dist, 
+                          Par0 = Par0_4s,
+                          fixPar = fixPar0,
+                          estAngleMean = estAngleMean,
+                          stateNames = stateNames)
+
+hmm
+
+# save the hmm output 
+readr::write_rds(hmm, path = here("data", "09.04.2025.4s_SIR_simulation.Rdata"))
+```
+
+save the viberti
+```{r state spatial visualization}
+states <- momentuHMM::viterbi(hmm)
+data_hmm1 <- data.frame(data_hmm)
+data_hmm1$states <- states
+data_hmm1$states <- factor(states, levels = c("1", "2", "3", "4"))
+
+# save the rds file for the state sequences 
+readr::write_rds(data_hmm1, path = here("data", "09.04.2025.4s_SIR_simulation_viberti.Rdata"))
+```
+
+save the plots as a pdf
+```{r example, echo=FALSE, results='hide'}
+pdf("09.04.2025.4s_SIR_simulation_HMM.pdf")
+plot(hmm, breaks = 20, ask=FALSE)
+dev.off()
+```
+
+```{r time series plot}
+sir_vib <- data_hmm1 %>% dplyr::select(ID, step, states)
+sir_vib$ID <- sub("-.*", "", sir_vib$ID)
+sir_vib1 <- sir_vib %>% na.omit()
+
+sir_vib1
+sir_vib1 %>% filter(states == "3") %>% distinct(ID)
+data_hmm %>% filter(state == "3") %>% distinct(ID)
+
+ggplot(sir_vib1, aes(1:nrow(sir_vib1), step, col = states, group = NA)) + 
+    geom_line() +
+    geom_point(size = 0.5)  +
+  scale_color_manual(values = c("#E69F00", "#0072B2", "#009E73", "black"), 
+                     labels = c("1; S(Susceptible)", 
+                                "2; I (Infected)", 
+                                "3; R (Recovered)",
+                               "4; D (Dead)"),
+                     name = "State") +
+    facet_wrap("ID", scales = "free_x") +
+    labs(x = "Time", y = "Step length", col = "State") +
+    theme_bw() +
+    theme(strip.text = element_blank(), 
+          strip.background = element_blank(),
+          axis.text = element_blank(), 
+          axis.ticks = element_blank())+
+  ylim(0, 3000)
+```
+
+# Footer
+```{r footer}
+sessionInfo()
+```

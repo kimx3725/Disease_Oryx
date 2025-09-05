@@ -1,0 +1,150 @@
+---
+title: "6.fit_HMM_oryx"
+author: "Dennis Kim"
+date: "2024-01-22"
+output: html_document
+---
+
+# Document Preamble 
+```{r preamble, message=FALSE, warning=FALSE}
+# load libraries
+library(knitr)
+library(dplyr)
+library(readr)
+library(data.table)
+library(here)
+library(stringr)
+library(tidyr)
+library(purrr)
+library(lubridate)
+library(scales)
+library(forcats)
+library(caret)
+
+# call environmental data
+library(terra)
+
+# analysis
+library(momentuHMM)
+library(adehabitatLT)
+
+# visualization 
+library(ggplot2)
+library(patchwork)
+
+options(width = 150)
+```
+
+Read in the prep data
+```{r read in prep data}
+# call data 
+## HMM fitted output with estimated states
+hmm_data <- readr::read_rds(here::here("data", "09.04.2025.4s_SIR_simulation_viberti.Rdata"))
+
+colnames(hmm_data)[8] <- "null_state"
+colnames(hmm_data)[9] <- "est_state"
+hmm_data
+```
+
+# accuracy metrics 
+```{r accuracy metrics}
+# Function to calculate metrics
+calculate_metrics <- function(actual, predicted, state) {
+  # Create binary vectors for the current state
+  actual_binary <- ifelse(actual == state, 1, 0)
+  predicted_binary <- ifelse(predicted == state, 1, 0)
+  
+  # Confusion Matrix
+  cm <- confusionMatrix(as.factor(predicted_binary), as.factor(actual_binary), positive = "1")
+  
+  # Extract metrics
+  accuracy <- cm$overall["Accuracy"]
+  precision <- cm$byClass["Precision"]
+  recall <- cm$byClass["Recall"]
+  F1 <- cm$byClass["F1"]
+  
+  return(data.frame(state = state, accuracy = accuracy, precision = precision, recall = recall, F1 = F1))
+}
+
+# Apply the function to each state
+metrics <- bind_rows(lapply(unique(hmm_data$null_state), function(state) {
+  calculate_metrics(hmm_data$null_state, hmm_data$est_state, state)
+}))
+
+# View the calculated metrics
+print(metrics)
+
+metrics
+
+# save accuracy metrics as RDS file for further analysis
+saveRDS(metrics, "09_04_2025_HMM_simulation_accuracy_final_metrics.rds")
+```
+
+
+```{r accuracy matrix}
+# Step 2: Create confusion matrix
+conf_matrix <- table(hmm_data$null_state, hmm_data$est_state)
+conf_matrix
+
+# get the proportion to each state - precentage
+# Convert the confusion matrix to percentages
+conf_matrix_percentage <- prop.table(conf_matrix, margin = 1) * 100
+conf_matrix_percentage
+```
+
+confusion matrix
+```{r confusion matrix}
+# make it to the dataframe
+conf_matrix_df <- as.data.frame.matrix(conf_matrix_percentage)
+rownames(conf_matrix_df) <- c("S", "I", "R", "D")  # Assuming you know the row order matches these states
+conf_matrix_df <- cbind(actual_state = rownames(conf_matrix_df), conf_matrix_df)
+conf_matrix_df <- gather(conf_matrix_df, key = "estimated_state", value = "percentage", -actual_state)
+conf_matrix_df
+
+## change the factorized values names
+conf_matrix_df <- conf_matrix_df %>%
+  mutate(
+    estimated_state = case_when(
+      estimated_state == 1 ~ "S",
+      estimated_state == 2 ~ "I",
+      estimated_state == 3 ~ "R",
+      estimated_state == 4 ~ "D",
+      TRUE ~ "Unknown"
+    )
+  )
+
+## factorize the x and y axis columns 
+conf_matrix_df$actual_state <- factor(conf_matrix_df$actual_state, levels = c("S", "I", "R", "D"))
+conf_matrix_df$estimated_state <- factor(conf_matrix_df$estimated_state, levels = c("S", "I", "R", "D"))
+
+conf_matrix_df
+```
+
+```{r vis}
+# Plot the confusion matrix
+fig10 <- ggplot(data = conf_matrix_df, aes(x = estimated_state, y = reorder(actual_state, -as.numeric(actual_state)), fill = percentage)) +
+  geom_tile(color = "black") +  # Add tiles with black border
+  scale_fill_gradient2(
+    low = "white", high = "#b30000",  # Set colors for gradient
+    limits = c(0, 100),  # Correct the limits for percentage data
+    space = "Lab",
+    name = "Percentage"
+  ) +
+  coord_fixed(ratio = 1) +  # Keep aspect ratio of tiles 1 to ensure they are square
+  geom_text(aes(label = paste0(round(percentage, 1), "%")), color = "black", size = 4) +  # Correct the reference to 'percentage'
+  scale_x_discrete(position = "top") +  # Set x-axis labels to the top
+  theme(
+    panel.border = element_rect(color = "black", fill = NA, size = 1),
+    panel.background = element_blank()
+  ) +
+  labs(title = "True states vs estimated states of the simulated individuals", x = "Estimated State", y = "Actual State", fill = "Percentage")  # Set labels for axes and legend
+
+fig10
+```
+
+
+
+# Footer
+```{r footer}
+sessionInfo()
+```
