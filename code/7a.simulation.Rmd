@@ -145,7 +145,7 @@ prep for the recursive Markov chain manner for getting the infection & behaviora
 trans_m <- matrix(c(
   0.65, 0.3, 0, 0.05,
   0, 0.45, 0.15, 0.4,
-  0, 0, 1, 0,
+  0, 0, 0.98, 0.02,
   0, 0, 0, 1
 ), nrow = 4, ncol = 4, byrow = TRUE)
 
@@ -381,4 +381,5 @@ p
 # Footer
 ```{r footer}
 sessionInfo()
+
 ```
