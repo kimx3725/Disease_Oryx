@@ -1,10 +1,3 @@
----
-title: "10.Simulation_SIR"
-author: "Dennis Kim"
-date: "2024-01-30"
-output: html_document
----
-
 # Document Preamble 
 ```{r preamble, message=FALSE, warning=FALSE}
 # load libraries
@@ -383,3 +376,4 @@ p
 sessionInfo()
 
 ```
+
