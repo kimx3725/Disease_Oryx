@@ -1,10 +1,3 @@
----
-title: "4.constrained_4state_HHMM"
-author: "Dennis Kim"
-date: "`r Sys.Date()`"
-output: html_document
----
-
 # Document Preamble 
 ```{r preamble, message=FALSE, warning=FALSE}
 # load libraries
@@ -319,3 +312,4 @@ hhmm
 ```{r footer}
 sessionInfo()
 ```
+
