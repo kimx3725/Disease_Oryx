@@ -11,5 +11,8 @@ The repository contains all the annotated code examples of the manuscript. Pleas
 - g.simulation.Rmd: runs a simulation to generate 30 days of hourly movement trajectories for 20 individuals - illustrating the potential of SIR formulations for systems where recovery is common. 
 - h.4st_SIR_HMM_simulation.Rmd: runs a constrained 4-state HMM to estimate 4-state infection states from the simulated data. 
 
+## Vignettes
+- all the vignette files are stored in the folder "Vignettes" with the same titles as the above.
+
 ## Data
 The scimitar-horned oryx was classified as Extinct in the Wild by the IUCN Red List from 2000 to December 2023, when the species was downlisted to Endangered (IUCN SSC ASG, 2023). Due to the species’ extremely threatened status and history of hunting by humans, data supporting this research are sensitive and unavailable publicly. The oryx movement data are owned by the Environment Agency - Abu Dhabi (EAD). They are available to qualified researchers by contacting the Director of Environmental Information Management at EAD (https://www.ead.gov.ae/en) and requesting an EAD Data Usage Agreement to access GPS tracking data of re-introduced oryx in Chad. However, the simulated data and code are available in the GitHub repository. 
