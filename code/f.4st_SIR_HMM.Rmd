@@ -116,38 +116,9 @@ data_hmm1$states <- factor(states, levels = c("1", "2", "3", "4"))
 readr::write_rds(data_hmm1, path = here("data", "09.02.2025.4s_SIR_remain_v2_viberti.Rdata"))
 ```
 
-save the plots as a pdf
-```{r example, echo=FALSE, results='hide'}
-pdf("SIR_remained_v2_HMM.pdf")
-plot(hmm, breaks = 20, ask=FALSE)
-dev.off()
-```
-
-```{r time series plot}
-sir_vib <- data_hmm1 %>% dplyr::select(ID, step, states)
-sir_vib$ID <- sub("-.*", "", sir_vib$ID)
-sir_vib1 <- sir_vib %>% na.omit()
-
-ggplot(sir_vib1, aes(1:nrow(sir_vib1), step, col = states, group = NA)) + 
-    geom_line() +
-    geom_point(size = 0.5)  +
-  scale_color_manual(values = c("#E69F00", "#0072B2", "black"), 
-                     labels = c("1; S(Susceptible)", 
-                                "2; I (Infected)", 
-                               "4; D (Dead)"),
-                     name = "State") +
-    facet_wrap("ID", scales = "free_x") +
-    labs(x = "Time", y = "Step length", col = "State") +
-    theme_bw() +
-    theme(strip.text = element_blank(), 
-          strip.background = element_blank(),
-          axis.text = element_blank(), 
-          axis.ticks = element_blank())+
-  ylim(0, 3000)
-```
-
 # Footer
 ```{r footer}
 sessionInfo()
 
 ```
+
